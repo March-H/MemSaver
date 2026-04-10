@@ -7,13 +7,8 @@ namespace APIForwarder {
     using CudaMallocFunc = cudaError_t (*)(void**, size_t);
     using CudaFreeFunc = cudaError_t (*)(void*);
 
-#if defined(USE_ROCM)
-    static constexpr const char* MALLOC_NAME = "hipMalloc";
-    static constexpr const char* FREE_NAME = "hipFree";
-#else
     static constexpr const char* MALLOC_NAME = "cudaMalloc";
     static constexpr const char* FREE_NAME = "cudaFree";
-#endif
 
     static void *check_dlsym(void *value) {
         if (nullptr == value) {

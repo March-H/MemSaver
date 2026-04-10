@@ -54,57 +54,7 @@
 
 
 namespace CUDAUtils {
-#if defined(USE_ROCM)
-
-    #if HIP_VERSION < 60304000 // rocm/hip 6.3.4
-        #pragma message "You need to implement torch_memory_saver in ROCm/HIP 6.3.4 or lower. We did not support it currently."
-    #else
-        #if TMS_ROCM_LEGACY_CHUNKED
-            #pragma message "Using ROCm/HIP 6.x implementation (chunked allocation workaround)"
-        #else
-            #pragma message "Using ROCm/HIP >= 7.0 implementation (single allocation, same as CUDA)"
-        #endif
-
-        static CUdevice cu_ctx_get_device() {
-            int device;
-            CUDA_ERROR_CHECK(hipGetDevice(&device));
-            return static_cast<CUdevice>(device);
-        }
-
-        static CUdevice cu_device_get(int device_ordinal) {
-            CUdevice ans;
-            CURESULT_CHECK(hipDeviceGet(&ans, device_ordinal));
-            return ans;
-        }
-
-        static cudaError_t cu_mem_create(CUmemGenericAllocationHandle *alloc_handle, size_t size, CUdevice device) {
-            hipMemAllocationProp prop = {};
-            prop.type = hipMemAllocationTypePinned;
-            prop.location.type = hipMemLocationTypeDevice;
-            prop.location.id = device;
-            prop.allocFlags.compressionType = 0x0;
-
-            hipError_t ret = hipMemCreate(alloc_handle, size, &prop, 0);
-            if (ret == hipErrorOutOfMemory) {
-                std::cerr << "[torch_memory_saver.cpp] hipMemCreate hipErrorOutOfMemory (may not be an issue e.g. torch allocator will free cache and retry)" << std::endl;
-                return hipErrorOutOfMemory;
-            }
-            CURESULT_CHECK(ret);
-
-            return hipSuccess;
-        }
-
-        static void cu_mem_set_access(void *ptr, size_t size, CUdevice device) {
-            hipMemAccessDesc accessDesc = {};
-            accessDesc.location.type = hipMemLocationTypeDevice;
-            accessDesc.location.id = device;
-            accessDesc.flags = hipMemAccessFlagsProtReadWrite;
-            CURESULT_CHECK(hipMemSetAccess(ptr, size, &accessDesc, 1));
-        }
-    #endif
-
-#elif defined(USE_CUDA)
-    static cudaError_t cu_mem_create(CUmemGenericAllocationHandle *alloc_handle, size_t size, CUdevice device) {
+    inline cudaError_t cu_mem_create(CUmemGenericAllocationHandle *alloc_handle, size_t size, CUdevice device) {
         CUmemAllocationProp prop = {};
         prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
         prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
@@ -126,7 +76,7 @@ namespace CUDAUtils {
         return cudaSuccess;
     }
 
-    static void cu_mem_set_access(void *ptr, size_t size, CUdevice device) {
+    inline void cu_mem_set_access(void *ptr, size_t size, CUdevice device) {
         CUmemAccessDesc access_desc = {};
         access_desc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
         access_desc.location.id = device;
@@ -134,22 +84,17 @@ namespace CUDAUtils {
         CURESULT_CHECK(cuMemSetAccess((CUdeviceptr) ptr, size, &access_desc, 1));
     }
 
-    static CUdevice cu_ctx_get_device() {
+    inline CUdevice cu_ctx_get_device() {
         CUdevice ans;
         CURESULT_CHECK(cuCtxGetDevice(&ans));
         return ans;
     }
 
-    static CUdevice cu_device_get(int device_ordinal) {
+    inline CUdevice cu_device_get(int device_ordinal) {
         CUdevice ans;
         CURESULT_CHECK(cuDeviceGet(&ans, device_ordinal));
         return ans;
     }
-
-#else
-    #error "USE_PLATFORM is not set"
-
-#endif
 }
 
 inline bool get_bool_env_var(const char* name) {

@@ -5,13 +5,8 @@
 #include <atomic>
 #include <mutex>
 #include <string>
-#include <vector>
 #include "utils.h"
 #include "macro.h"
-
-#if TMS_ROCM_LEGACY_CHUNKED
-#include "hardware_amd_support.h"
-#endif
 
 enum class AllocationState {
     // Memory is mapped and accessible
@@ -27,16 +22,7 @@ struct AllocationMetadata {
     AllocationState state;
     bool enable_cpu_backup;
     void* cpu_backup;
-
-#if TMS_ROCM_LEGACY_CHUNKED
-    // ROCm 6.x: Chunked allocation workaround
-    size_t aligned_size;
-    std::vector<CUmemGenericAllocationHandle> allocHandles;
-    std::vector<size_t> chunk_sizes;
-#else
-    // CUDA and ROCm 7.0+: Single allocation handle
     CUmemGenericAllocationHandle allocHandle;
-#endif
 };
 
 class TorchMemorySaver {

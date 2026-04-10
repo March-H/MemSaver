@@ -11,10 +11,6 @@ TorchMemorySaver &TorchMemorySaver::instance() {
 }
 
 cudaError_t TorchMemorySaver::malloc(void **ptr, CUdevice device, size_t size, const std::string& tag, const bool enable_cpu_backup) {
-#if TMS_ROCM_LEGACY_CHUNKED
-    return ROCmHIPImplementation::rocm_malloc(ptr, device, size, tag, enable_cpu_backup, allocation_metadata_, allocator_metadata_mutex_);
-
-#else
     const uint64_t memory_margin_bytes = memory_margin_bytes_.load();
     if (memory_margin_bytes > 0) {
         size_t free_bytes, total_bytes;
@@ -55,15 +51,10 @@ cudaError_t TorchMemorySaver::malloc(void **ptr, CUdevice device, size_t size, c
               << std::endl;
 #endif
 
-#endif
     return cudaSuccess;
 }
 
 cudaError_t TorchMemorySaver::free(void *ptr) {
-#if TMS_ROCM_LEGACY_CHUNKED
-    return ROCmHIPImplementation::rocm_free(ptr, allocation_metadata_, allocator_metadata_mutex_);
-
-#else
     AllocationMetadata metadata;
     {
         const std::lock_guard <std::mutex> lock(allocator_metadata_mutex_);
@@ -93,15 +84,10 @@ cudaError_t TorchMemorySaver::free(void *ptr) {
               << std::endl;
 #endif
 
-#endif
     return cudaSuccess;
 }
 
 void TorchMemorySaver::pause(const std::string& tag) {
-#if TMS_ROCM_LEGACY_CHUNKED
-    ROCmHIPImplementation::rocm_pause(tag, allocation_metadata_, allocator_metadata_mutex_);
-
-#else
     const std::lock_guard <std::mutex> lock(allocator_metadata_mutex_);
 
     for (auto it = allocation_metadata_.begin(); it != allocation_metadata_.end(); ++it) {
@@ -142,14 +128,9 @@ void TorchMemorySaver::pause(const std::string& tag) {
                   << std::endl;
 #endif
     }
-#endif
 }
 
 void TorchMemorySaver::resume(const std::string& tag) {
-#if TMS_ROCM_LEGACY_CHUNKED
-    ROCmHIPImplementation::rocm_resume(tag, allocation_metadata_, allocator_metadata_mutex_);
-
-#else
     const std::lock_guard <std::mutex> lock(allocator_metadata_mutex_);
 
     for (auto it = allocation_metadata_.begin(); it != allocation_metadata_.end(); ++it) {
@@ -198,7 +179,6 @@ void TorchMemorySaver::resume(const std::string& tag) {
         metadata.state = AllocationState::ACTIVE;
         metadata.allocHandle = newAllocHandle;
     }
-#endif
 }
 
 uint8_t* TorchMemorySaver::get_cpu_backup_pointer(const uint8_t* query_gpu_ptr, uint64_t query_size) {
@@ -207,12 +187,7 @@ uint8_t* TorchMemorySaver::get_cpu_backup_pointer(const uint8_t* query_gpu_ptr, 
     for (auto it = allocation_metadata_.begin(); it != allocation_metadata_.end(); ++it) {
         uint8_t *ptr = (uint8_t*) it->first;
         AllocationMetadata &metadata = it->second;
-
-#if TMS_ROCM_LEGACY_CHUNKED
-        size_t total_size = metadata.aligned_size;
-#else
         size_t total_size = metadata.size;
-#endif
 
         if ((ptr <= query_gpu_ptr) && (query_gpu_ptr + query_size <= ptr + total_size)) {
             const size_t offset = query_gpu_ptr - ptr;
