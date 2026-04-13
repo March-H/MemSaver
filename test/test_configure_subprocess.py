@@ -51,3 +51,46 @@ def test_restores_ld_preload_after_context():
             with configure_subprocess():
                 assert os.environ["LD_PRELOAD"] != original
         assert os.environ.get("LD_PRELOAD") == original
+
+
+def test_prepends_cuda_runtime_lib_dir_to_ld_library_path():
+    """When CUDA runtime lib dir is found, it should be prepended to LD_LIBRARY_PATH."""
+    from torch_memory_saver.hooks.mode_preload import configure_subprocess
+
+    existing = "/existing/lib/path"
+    runtime_lib = "/fake/nvidia/cuda_runtime/lib"
+    with patch.dict(os.environ, {"LD_LIBRARY_PATH": existing}, clear=False):
+        with (
+            patch(
+                "torch_memory_saver.hooks.mode_preload.get_binary_path_from_package",
+                return_value=FAKE_LIB,
+            ),
+            patch(
+                "torch_memory_saver.hooks.mode_preload._find_cuda_runtime_lib_dir",
+                return_value=runtime_lib,
+            ),
+        ):
+            with configure_subprocess():
+                parts = os.environ.get("LD_LIBRARY_PATH", "").split(":")
+                assert parts[0] == runtime_lib
+                assert existing in parts
+
+
+def test_keeps_ld_library_path_when_no_cuda_runtime_lib_dir():
+    """When no CUDA runtime lib dir is found, LD_LIBRARY_PATH should remain unchanged."""
+    from torch_memory_saver.hooks.mode_preload import configure_subprocess
+
+    existing = "/existing/lib/path"
+    with patch.dict(os.environ, {"LD_LIBRARY_PATH": existing}, clear=False):
+        with (
+            patch(
+                "torch_memory_saver.hooks.mode_preload.get_binary_path_from_package",
+                return_value=FAKE_LIB,
+            ),
+            patch(
+                "torch_memory_saver.hooks.mode_preload._find_cuda_runtime_lib_dir",
+                return_value="",
+            ),
+        ):
+            with configure_subprocess():
+                assert os.environ.get("LD_LIBRARY_PATH") == existing
