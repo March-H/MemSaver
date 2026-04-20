@@ -1,7 +1,9 @@
-build
-*.egg-info
+build/
 *.so
-.idea
-dist
-**/__pycache__/
-.vscode
+*.a
+*.o
+*.obj
+*.cmake.user
+CMakeUserPresets.json
+.idea/
+.vscode/
