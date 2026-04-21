@@ -9,6 +9,9 @@ include(CMakePackageConfigHelpers)
 
 option(MEMSAVER_FATAL_ON_ERROR "Abort process on internal invariant violations." ON)
 option(MEMSAVER_BUILD_TESTS "Build C++ tests." ON)
+option(MEMSAVER_BUILD_TORCH_TESTS "Build libtorch-based C++ tests." ON)
+set(MEMSAVER_TORCH_CMAKE_PREFIX ""
+    CACHE PATH "Optional path to torch/share/cmake for find_package(Torch)")
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
   message(FATAL_ERROR "MemSaver currently supports Linux only.")
@@ -145,4 +148,101 @@ if(MEMSAVER_BUILD_TESTS)
       MEMSAVER_INIT_ALLOCATION_MODE=normal
       $<TARGET_FILE:memsaver_preload_smoke>
   )
+
+  if(MEMSAVER_BUILD_TORCH_TESTS)
+    set(_memsaver_torch_prefixes "")
+    if(MEMSAVER_TORCH_CMAKE_PREFIX)
+      list(APPEND _memsaver_torch_prefixes "${MEMSAVER_TORCH_CMAKE_PREFIX}")
+    endif()
+
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+      execute_process(
+        COMMAND ${Python3_EXECUTABLE} -c
+          "import torch; print(torch.utils.cmake_prefix_path)"
+        RESULT_VARIABLE MEMSAVER_TORCH_PREFIX_RESULT
+        OUTPUT_VARIABLE MEMSAVER_TORCH_PREFIX_FROM_PYTHON
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+      )
+      if(MEMSAVER_TORCH_PREFIX_RESULT EQUAL 0 AND MEMSAVER_TORCH_PREFIX_FROM_PYTHON)
+        list(APPEND _memsaver_torch_prefixes "${MEMSAVER_TORCH_PREFIX_FROM_PYTHON}")
+      endif()
+    endif()
+
+    list(REMOVE_DUPLICATES _memsaver_torch_prefixes)
+    foreach(_prefix IN LISTS _memsaver_torch_prefixes)
+      list(PREPEND CMAKE_PREFIX_PATH "${_prefix}")
+    endforeach()
+
+    find_package(Torch QUIET)
+    if(Torch_FOUND)
+      set(MEMSAVER_TORCH_LIBS ${TORCH_LIBRARIES})
+      set(MEMSAVER_PYTHON_CUDART_LIB "")
+      set(MEMSAVER_PYTHON_CUPTI_LIB "")
+      if(Python3_Interpreter_FOUND)
+        execute_process(
+          COMMAND ${Python3_EXECUTABLE} -c
+            "import pathlib, nvidia.cuda_runtime.lib as m; p = pathlib.Path(m.__file__).with_name('libcudart.so.12'); print(p if p.exists() else '')"
+          RESULT_VARIABLE MEMSAVER_CUDART_RESULT
+          OUTPUT_VARIABLE MEMSAVER_PYTHON_CUDART_LIB
+          OUTPUT_STRIP_TRAILING_WHITESPACE
+          ERROR_QUIET
+        )
+        if(NOT MEMSAVER_CUDART_RESULT EQUAL 0)
+          set(MEMSAVER_PYTHON_CUDART_LIB "")
+        endif()
+
+        execute_process(
+          COMMAND ${Python3_EXECUTABLE} -c
+            "import pathlib, nvidia.cuda_cupti.lib as m; p = pathlib.Path(m.__file__).with_name('libcupti.so.12'); print(p if p.exists() else '')"
+          RESULT_VARIABLE MEMSAVER_CUPTI_RESULT
+          OUTPUT_VARIABLE MEMSAVER_PYTHON_CUPTI_LIB
+          OUTPUT_STRIP_TRAILING_WHITESPACE
+          ERROR_QUIET
+        )
+        if(NOT MEMSAVER_CUPTI_RESULT EQUAL 0)
+          set(MEMSAVER_PYTHON_CUPTI_LIB "")
+        endif()
+      endif()
+
+      if(MEMSAVER_PYTHON_CUDART_LIB)
+        list(FILTER MEMSAVER_TORCH_LIBS EXCLUDE REGEX ".*libcudart\\.so(\\..*)?$")
+        list(APPEND MEMSAVER_TORCH_LIBS "${MEMSAVER_PYTHON_CUDART_LIB}")
+      endif()
+      if(MEMSAVER_PYTHON_CUPTI_LIB)
+        list(APPEND MEMSAVER_TORCH_LIBS "${MEMSAVER_PYTHON_CUPTI_LIB}")
+      endif()
+      list(REMOVE_DUPLICATES MEMSAVER_TORCH_LIBS)
+
+      add_executable(memsaver_torch_basic_test tests/cpp/basic_test.cpp)
+      target_compile_features(memsaver_torch_basic_test PRIVATE cxx_std_17)
+      target_include_directories(memsaver_torch_basic_test PRIVATE
+        ${CUDAToolkit_INCLUDE_DIRS}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+      )
+      target_link_libraries(memsaver_torch_basic_test PRIVATE
+        ${MEMSAVER_TORCH_LIBS}
+        CUDA::cuda_driver
+        CUDA::cupti
+        dl
+      )
+      separate_arguments(MEMSAVER_TORCH_CXX_FLAGS NATIVE_COMMAND "${TORCH_CXX_FLAGS}")
+      target_compile_options(memsaver_torch_basic_test PRIVATE ${MEMSAVER_TORCH_CXX_FLAGS})
+
+      add_test(
+        NAME memsaver_torch_basic_test
+        COMMAND ${CMAKE_COMMAND} -E env
+          LD_PRELOAD=$<TARGET_FILE:memsaver_preload>
+          MEMSAVER_INIT_ENABLE=0
+          MEMSAVER_INIT_ENABLE_CPU_BACKUP=0
+          MEMSAVER_INIT_ALLOCATION_MODE=normal
+          $<TARGET_FILE:memsaver_torch_basic_test>
+      )
+    else()
+      message(WARNING
+        "Torch C++ package not found; skipping memsaver_torch_basic_test. "
+        "Set MEMSAVER_TORCH_CMAKE_PREFIX to torch/share/cmake if needed.")
+    endif()
+  endif()
 endif()
