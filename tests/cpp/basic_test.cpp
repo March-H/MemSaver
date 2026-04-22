@@ -107,6 +107,8 @@ void ExpectReleasedExact(
     const uint64_t expected_release,
     const char* label) {
   const uint64_t released = before_delta > after_delta ? before_delta - after_delta : 0ULL;
+  std::cout << "[basic_test] " << label << " observed released == " << released / 1024.0 / 1024.0
+            << " MB" << std::endl;
   if (released == expected_release) {
     return;
   }
@@ -366,8 +368,6 @@ void TestCase4MatmulWithTags(const PreloadApi& api) {
       torch::NoGradGuard warm_no_grad;
       auto warm_a = torch::randn({512, 512}, warm_fp16_cuda);
       auto warm_b = torch::randn({512, 4096}, warm_fp16_cuda);
-      auto warm_filler = AllocBytesTensor(16ULL * kMiB);
-      warm_filler.fill_(0x3C);
       auto warm_c = torch::matmul(warm_a, warm_b);
       (void)warm_c;
       SyncCuda();
@@ -392,10 +392,6 @@ void TestCase4MatmulWithTags(const PreloadApi& api) {
   SyncCuda();
   ExpectDeltaExact(baseline, 22ULL * kMiB, "case4 after MatB");
 
-  auto filler = AllocBytesTensor(16ULL * kMiB);
-  filler.fill_(0x3C);
-  SyncCuda();
-
   CheckCuda(api.set_interesting(false), "set_interesting(false) case4 matmul");
   torch::Tensor c;
   {
@@ -412,13 +408,41 @@ void TestCase4MatmulWithTags(const PreloadApi& api) {
       api, a, "get_cpu_backup_pointer(case4:MatA)");
   CheckManagedMetadataExistsForTensor(
       api, b, "get_cpu_backup_pointer(case4:MatB)");
+  const uint64_t final_delta = CurrentDeltaBytes(baseline);
+  ExpectDeltaExact(baseline, final_delta, "case4 final delta");
 
-  ExpectDeltaExact(baseline, 42ULL * kMiB, "case4 final delta");
+  // Ensure there are exactly two live managed metadata entries: MatA and MatB.
+  // Release amount must be exactly MatA(2MB) + MatB(20MB) = 22MB.
+  CheckCuda(api.pause(nullptr), "pause(all) case4");
+  SyncCuda();
+  const uint64_t paused_all_delta = CurrentDeltaBytes(baseline);
+  ExpectReleasedExact(
+      final_delta, paused_all_delta, 22ULL * kMiB, "case4 pause(all) released bytes");
+  CheckCuda(api.resume(nullptr), "resume(all) case4");
+  SyncCuda();
+  ExpectDeltaExact(baseline, final_delta, "case4 resume(all) delta");
+
+  CheckCuda(api.pause("MatA"), "pause(MatA) case4");
+  SyncCuda();
+  const uint64_t paused_mat_a_delta = CurrentDeltaBytes(baseline);
+  ExpectReleasedExact(
+      final_delta, paused_mat_a_delta, 2ULL * kMiB, "case4 pause(MatA) released bytes");
+  CheckCuda(api.resume("MatA"), "resume(MatA) case4");
+  SyncCuda();
+  ExpectDeltaExact(baseline, final_delta, "case4 resume(MatA) delta");
+
+  CheckCuda(api.pause("MatB"), "pause(MatB) case4");
+  SyncCuda();
+  const uint64_t paused_mat_b_delta = CurrentDeltaBytes(baseline);
+  ExpectReleasedExact(
+      final_delta, paused_mat_b_delta, 20ULL * kMiB, "case4 pause(MatB) released bytes");
+  CheckCuda(api.resume("MatB"), "resume(MatB) case4");
+  SyncCuda();
+  ExpectDeltaExact(baseline, final_delta, "case4 resume(MatB) delta");
 
   a.reset();
   b.reset();
   c.reset();
-  filler.reset();
   EmptyTorchCache();
 }
 
