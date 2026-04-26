@@ -25,12 +25,10 @@ ContextImpl::~ContextImpl() {
   allocations_.clear();
 }
 
-// Destructor-only cleanup path for one regular allocation record.
+// Destructor-only cleanup path for one allocation record.
 //
-// This best-effort path:
-// - unmaps and releases active VMM allocation handles
-// - frees reserved virtual address range
-// - releases optional pinned-host CPU backup
+// Every cleanup call is still checked here. Any CUDA/CU cleanup failure logs and
+// aborts immediately.
 void ContextImpl::ReleaseAllocationForShutdown(
     void* ptr,
     const AllocationMetadata& metadata) {
@@ -59,59 +57,36 @@ cudaError_t ContextImpl::Malloc(
     const CUdevice device,
     const size_t size,
     const RuntimeConfig& config) {
-  RETURN_IF_FALSE(ptr != nullptr, cudaErrorInvalidValue,
-                           "ContextImpl::Malloc: ptr should not be null");
-  RETURN_IF_FALSE(size > 0, cudaErrorInvalidValue,
-                           "ContextImpl::Malloc: size should be > 0");
-
   if (!config.interesting_region) {
-    return OriginalCudaApi::Malloc(ptr, size, use_original_cuda_symbols_);
+    RETURN_IF_CUDA_ERROR(
+        OriginalCudaApi::Malloc(ptr, size, use_original_cuda_symbols_));
+    return cudaSuccess;
   }
 
   if (config.allocation_mode == MEMSAVER_ALLOCATION_MODE_ARENA) {
-    return MallocArena(ptr, device, size, config.tag);
+    RETURN_IF_CU_ERROR_AS_CUDA(MallocArena(ptr, device, size, config.tag));
+    return cudaSuccess;
   }
-  return MallocRegular(ptr, device, size, config.tag, config.enable_cpu_backup);
+  RETURN_IF_CU_ERROR_AS_CUDA(
+      MallocRegular(ptr, device, size, config.tag, config.enable_cpu_backup));
+  return cudaSuccess;
 }
 
 // Allocate one regular VMM-backed block and track its metadata.
-cudaError_t ContextImpl::MallocRegular(
+CUresult ContextImpl::MallocRegular(
     void** ptr,
     const CUdevice device,
     const size_t size,
     const std::string& tag,
     const bool enable_cpu_backup) {
-  const size_t aligned_size = size;
 
   CUmemGenericAllocationHandle handle = 0;
-  RETURN_IF_CUDA_ERROR(
-      vmm::CreateMemoryHandle(&handle, aligned_size, device));
+  RETURN_IF_CU_ERROR(vmm::CreateMemoryHandle(&handle, size, device));
 
   CUdeviceptr reserved_address = 0;
-  CUresult cu_result =
-      cuMemAddressReserve(&reserved_address, aligned_size, 0, 0, 0);
-  if (cu_result != CUDA_SUCCESS) {
-    (void)utils::CheckCu(cuMemRelease(handle), "cuMemRelease", __FILE__, __func__,
-                        __LINE__);
-    return utils::CheckCu(cu_result, "cuMemAddressReserve", __FILE__, __func__,
-                         __LINE__);
-  }
-
-  cu_result = cuMemMap(reserved_address, aligned_size, 0, handle, 0);
-  if (cu_result != CUDA_SUCCESS) {
-    (void)vmm::RollbackAllocationFailure(reserved_address, aligned_size, handle);
-    return utils::CheckCu(cu_result, "cuMemMap", __FILE__, __func__, __LINE__);
-  }
-
-  const cudaError_t access_status =
-      vmm::SetAccess(reinterpret_cast<void*>(reserved_address), aligned_size,
-                            device);
-  if (access_status != cudaSuccess) {
-    (void)utils::CheckCu(cuMemUnmap(reserved_address, aligned_size), "cuMemUnmap",
-                        __FILE__, __func__, __LINE__);
-    (void)vmm::RollbackAllocationFailure(reserved_address, aligned_size, handle);
-    return access_status;
-  }
+  RETURN_IF_CU_ERROR(cuMemAddressReserve(&reserved_address, size, 0, 0, 0));
+  RETURN_IF_CU_ERROR(cuMemMap(reserved_address, size, 0, handle, 0));
+  RETURN_IF_CU_ERROR(vmm::SetAccess(reserved_address, size, device));
 
   *ptr = reinterpret_cast<void*>(reserved_address);
   {
@@ -119,7 +94,7 @@ cudaError_t ContextImpl::MallocRegular(
     allocations_.emplace(
         *ptr,
         AllocationMetadata{
-            aligned_size,
+            size,
             device,
             tag,
             AllocationState::ACTIVE,
@@ -130,7 +105,7 @@ cudaError_t ContextImpl::MallocRegular(
         });
   }
 
-  return cudaSuccess;
+  return CUDA_SUCCESS;
 }
 
 // Free pointer managed by this context.
@@ -139,16 +114,14 @@ cudaError_t ContextImpl::MallocRegular(
 // - unknown pointer: forward to real cudaFree path
 // - managed pointer: unmap/release/free VMM resources and optional CPU backup
 cudaError_t ContextImpl::Free(void* ptr) {
-  if (ptr == nullptr) {
-    return cudaSuccess;
-  }
 
   AllocationMetadata metadata;
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     auto metadata_it = allocations_.find(ptr);
     if (metadata_it == allocations_.end()) {
-      return OriginalCudaApi::Free(ptr, use_original_cuda_symbols_);
+      RETURN_IF_CUDA_ERROR(OriginalCudaApi::Free(ptr, use_original_cuda_symbols_));
+      return cudaSuccess;
     }
 
     metadata = metadata_it->second;
@@ -159,14 +132,14 @@ cudaError_t ContextImpl::Free(void* ptr) {
   // only ACTIVE allocations should run the unmap/release path here.
   if (metadata.state == AllocationState::ACTIVE) {
     RETURN_IF_CUDA_ERROR(cudaDeviceSynchronize());
-    RETURN_IF_CU_ERROR(
+    RETURN_IF_CU_ERROR_AS_CUDA(
         cuMemUnmap(reinterpret_cast<CUdeviceptr>(ptr), metadata.size));
     RETURN_IF_FALSE(metadata.alloc_handle != 0, cudaErrorInvalidValue,
                              "Free: active allocation handle should not be 0");
-    RETURN_IF_CU_ERROR(cuMemRelease(metadata.alloc_handle));
+    RETURN_IF_CU_ERROR_AS_CUDA(cuMemRelease(metadata.alloc_handle));
   }
 
-  RETURN_IF_CU_ERROR(
+  RETURN_IF_CU_ERROR_AS_CUDA(
       cuMemAddressFree(reinterpret_cast<CUdeviceptr>(ptr), metadata.size));
 
   if (metadata.cpu_backup != nullptr) {
@@ -212,11 +185,11 @@ cudaError_t ContextImpl::Pause(const std::string& tag_filter) {
           metadata.cpu_backup, ptr, metadata.size, cudaMemcpyDeviceToHost));
     }
 
-    RETURN_IF_CU_ERROR(
+    RETURN_IF_CU_ERROR_AS_CUDA(
         cuMemUnmap(reinterpret_cast<CUdeviceptr>(ptr), metadata.size));
     RETURN_IF_FALSE(metadata.alloc_handle != 0, cudaErrorInvalidValue,
                              "Pause: active allocation handle should not be 0");
-    RETURN_IF_CU_ERROR(cuMemRelease(metadata.alloc_handle));
+    RETURN_IF_CU_ERROR_AS_CUDA(cuMemRelease(metadata.alloc_handle));
     metadata.alloc_handle = 0;
 
     metadata.state = AllocationState::PAUSED;
@@ -250,29 +223,15 @@ cudaError_t ContextImpl::Resume(const std::string& tag_filter) {
                              "Resume: allocation is not PAUSED");
 
     CUmemGenericAllocationHandle new_alloc_handle = 0;
-    RETURN_IF_CUDA_ERROR(
+    RETURN_IF_CU_ERROR_AS_CUDA(
         vmm::CreateMemoryHandle(&new_alloc_handle, metadata.size,
-                                       metadata.device));
-
-    const CUresult map_result =
+                                metadata.device));
+    RETURN_IF_CU_ERROR_AS_CUDA(
         cuMemMap(reinterpret_cast<CUdeviceptr>(ptr), metadata.size, 0,
-                 new_alloc_handle, 0);
-    if (map_result != CUDA_SUCCESS) {
-      (void)utils::CheckCu(cuMemRelease(new_alloc_handle), "cuMemRelease", __FILE__,
-                          __func__, __LINE__);
-      return utils::CheckCu(map_result, "cuMemMap", __FILE__, __func__, __LINE__);
-    }
-
-    const cudaError_t access_status =
-        vmm::SetAccess(ptr, metadata.size, metadata.device);
-    if (access_status != cudaSuccess) {
-      (void)utils::CheckCu(cuMemUnmap(reinterpret_cast<CUdeviceptr>(ptr),
-                                     metadata.size),
-                          "cuMemUnmap", __FILE__, __func__, __LINE__);
-      (void)utils::CheckCu(cuMemRelease(new_alloc_handle), "cuMemRelease", __FILE__,
-                          __func__, __LINE__);
-      return access_status;
-    }
+                 new_alloc_handle, 0));
+    RETURN_IF_CU_ERROR_AS_CUDA(
+        vmm::SetAccess(reinterpret_cast<CUdeviceptr>(ptr), metadata.size,
+                       metadata.device));
 
     if (metadata.enable_cpu_backup) {
       RETURN_IF_FALSE(metadata.cpu_backup != nullptr, cudaErrorInvalidValue,
@@ -298,9 +257,7 @@ cudaError_t ContextImpl::Resume(const std::string& tag_filter) {
 // - allocation ACTIVE: out_cpu_ptr = nullptr
 // - allocation PAUSED with CPU backup: out_cpu_ptr points to host backup at matching offset
 //
-// Failure behavior:
-// - cudaErrorInvalidValue when range is unmanaged / not covered
-// - cudaErrorInvalidValue when allocation is PAUSED but backup is missing
+// Invalid queries and inconsistent paused-state metadata fail fast.
 cudaError_t ContextImpl::GetCpuBackupPointer(
     const uint8_t* query_gpu_ptr,
     const uint64_t query_size,
@@ -342,7 +299,7 @@ cudaError_t ContextImpl::GetCpuBackupPointer(
 
   RETURN_IF_FALSE(false, cudaErrorInvalidValue,
                            "GetCpuBackupPointer: matching allocation not found");
-  return cudaErrorInvalidValue;
+  return cudaSuccess;
 }
 
 cudaError_t ContextImpl::GetMetadataCountByTag(
@@ -364,101 +321,79 @@ cudaError_t ContextImpl::GetMetadataCountByTag(
 }
 
 // Lazily create one minimum-granularity shared handle for a device.
-cudaError_t ContextImpl::GetOrCreateSharedMinimumGranularityHandle(
+CUresult ContextImpl::GetOrCreateSharedMinimumGranularityHandle(
     const CUdevice device,
     CUmemGenericAllocationHandle* out_handle) {
-  RETURN_IF_FALSE(out_handle != nullptr, cudaErrorInvalidValue,
-                           "GetOrCreateSharedMinimumGranularityHandle: out_handle should not be null");
+  RETURN_IF_CU_FALSE(
+      out_handle != nullptr, CUDA_ERROR_INVALID_VALUE,
+      "GetOrCreateSharedMinimumGranularityHandle: out_handle should not be null");
 
   auto it = shared_minimum_granularity_handles_.find(device);
   if (it != shared_minimum_granularity_handles_.end()) {
     *out_handle = it->second;
-    return cudaSuccess;
+    return CUDA_SUCCESS;
   }
 
   size_t minimum_granularity = 0;
-  RETURN_IF_CUDA_ERROR(
+  RETURN_IF_CU_ERROR(
       vmm::GetVmmMinimumGranularity(device, &minimum_granularity));
 
   CUmemGenericAllocationHandle handle = 0;
-  RETURN_IF_CUDA_ERROR(
+  RETURN_IF_CU_ERROR(
       vmm::CreateMemoryHandle(&handle, minimum_granularity, device));
 
   shared_minimum_granularity_handles_.emplace(device, handle);
   *out_handle = handle;
-  return cudaSuccess;
+  return CUDA_SUCCESS;
 }
 
 // Map [address, address + size) to shared empty handle by granularity-sized chunks.
-cudaError_t ContextImpl::MapRangeToEmptyHandle(
+CUresult ContextImpl::MapRangeToEmptyHandle(
     const CUdeviceptr address,
     const size_t size,
     const CUmemGenericAllocationHandle empty_handle,
     const size_t minimum_granularity_bytes) {
-  RETURN_IF_FALSE(size > 0, cudaErrorInvalidValue,
-                           "MapRangeToEmptyHandle: size should be > 0");
-  RETURN_IF_FALSE(empty_handle != 0, cudaErrorInvalidValue,
-                           "MapRangeToEmptyHandle: empty_handle should not be 0");
-  RETURN_IF_FALSE(minimum_granularity_bytes > 0, cudaErrorInvalidValue,
-                           "MapRangeToEmptyHandle: minimum_granularity_bytes should be > 0");
-  RETURN_IF_FALSE(size % minimum_granularity_bytes == 0,
-                           cudaErrorInvalidValue,
-                           "MapRangeToEmptyHandle: size should be aligned to minimum granularity");
+  RETURN_IF_CU_FALSE(size > 0, CUDA_ERROR_INVALID_VALUE,
+                     "MapRangeToEmptyHandle: size should be > 0");
+  RETURN_IF_CU_FALSE(empty_handle != 0, CUDA_ERROR_INVALID_VALUE,
+                     "MapRangeToEmptyHandle: empty_handle should not be 0");
+  RETURN_IF_CU_FALSE(
+      minimum_granularity_bytes > 0, CUDA_ERROR_INVALID_VALUE,
+      "MapRangeToEmptyHandle: minimum_granularity_bytes should be > 0");
+  RETURN_IF_CU_FALSE(
+      size % minimum_granularity_bytes == 0, CUDA_ERROR_INVALID_VALUE,
+      "MapRangeToEmptyHandle: size should be aligned to minimum granularity");
 
   size_t mapped_size = 0;
   while (mapped_size < size) {
-    const CUresult map_result = cuMemMap(
-        address + mapped_size, minimum_granularity_bytes, 0, empty_handle, 0);
-    if (map_result != CUDA_SUCCESS) {
-      size_t rollback_size = 0;
-      while (rollback_size < mapped_size) {
-        (void)cuMemUnmap(address + rollback_size, minimum_granularity_bytes);
-        rollback_size += minimum_granularity_bytes;
-      }
-      return utils::ConvertCuResultNoAbort(map_result);
-    }
+    RETURN_IF_CU_ERROR(cuMemMap(address + mapped_size, minimum_granularity_bytes,
+                                0, empty_handle, 0));
     mapped_size += minimum_granularity_bytes;
   }
 
-  return cudaSuccess;
+  return CUDA_SUCCESS;
 }
 
-cudaError_t ContextImpl::MallocArena(
+CUresult ContextImpl::MallocArena(
     void** ptr,
     const CUdevice device,
     const size_t size,
     const std::string& tag) {
 
   CUdeviceptr reserved_address = 0;
-  CUresult cu_result =
-      cuMemAddressReserve(&reserved_address, size, 0, 0, 0);
-  if (cu_result != CUDA_SUCCESS) {
-    return utils::CheckCu(cu_result, "cuMemAddressReserve", __FILE__, __func__,
-                         __LINE__);
-  }
+  RETURN_IF_CU_ERROR(cuMemAddressReserve(&reserved_address, size, 0, 0, 0));
 
   size_t minimum_granularity_bytes = 0;
-  RETURN_IF_CUDA_ERROR(
+  RETURN_IF_CU_ERROR(
       vmm::GetVmmMinimumGranularity(device, &minimum_granularity_bytes));
-  RETURN_IF_FALSE(minimum_granularity_bytes > 0, cudaErrorInvalidValue,
-                            "CreateArena: minimum_granularity_bytes should be > 0");
+  RETURN_IF_CU_FALSE(minimum_granularity_bytes > 0, CUDA_ERROR_INVALID_VALUE,
+                     "CreateArena: minimum_granularity_bytes should be > 0");
 
   CUmemGenericAllocationHandle shared_handle = 0;
-  const cudaError_t status =
-      GetOrCreateSharedMinimumGranularityHandle(device, &shared_handle);
-  if (status != cudaSuccess) {
-    (void)utils::CheckCu(cuMemAddressFree(reserved_address, size),
-                        "cuMemAddressFree", __FILE__, __func__, __LINE__);
-    return status;
-  }
-
-  const cudaError_t map_empty_status = MapRangeToEmptyHandle(
-      reserved_address, size, shared_handle, minimum_granularity_bytes);
-  if (map_empty_status != cudaSuccess) {
-    (void)utils::CheckCu(cuMemAddressFree(reserved_address, size),
-                        "cuMemAddressFree", __FILE__, __func__, __LINE__);
-    return map_empty_status;
-  }
+  RETURN_IF_CU_ERROR(
+      GetOrCreateSharedMinimumGranularityHandle(device, &shared_handle));
+  RETURN_IF_CU_ERROR(MapRangeToEmptyHandle(
+      reserved_address, size, shared_handle, minimum_granularity_bytes));
 
   *ptr = reinterpret_cast<void*>(reserved_address);
   {
@@ -476,7 +411,7 @@ cudaError_t ContextImpl::MallocArena(
     allocations_.emplace(*ptr, std::move(metadata));
   }
   
-  return cudaSuccess;
+  return CUDA_SUCCESS;
 }
 
 // Activate real mappings for [base + offset, base + offset + size_bytes) on a virtual-only arena.
@@ -506,9 +441,8 @@ cudaError_t ContextImpl::ActivateArenaOffsets(
     if (kv.second.device != device || kv.second.tag != tag) {
       continue;
     }
-    if (arena_metadata != nullptr) {
-      return cudaErrorInvalidValue;
-    }
+    RETURN_IF_FALSE(arena_metadata == nullptr, cudaErrorInvalidValue,
+                    "ActivateArenaOffsets: multiple matching arenas found");
     arena_base_ptr = kv.first;
     arena_metadata = &kv.second;
   }
@@ -520,29 +454,12 @@ cudaError_t ContextImpl::ActivateArenaOffsets(
     const uint64_t offset = offsets[i];
     const CUdeviceptr address =
         reinterpret_cast<CUdeviceptr>(arena_base_ptr) + static_cast<CUdeviceptr>(offset);
-    const CUresult unmap_result = cuMemUnmap(address, size);
-    if (unmap_result != CUDA_SUCCESS) {
-      return utils::ConvertCuResultNoAbort(unmap_result);
-    }
+    RETURN_IF_CU_ERROR_AS_CUDA(cuMemUnmap(address, size));
 
     CUmemGenericAllocationHandle handle = 0;
-    RETURN_IF_CUDA_ERROR(
-        vmm::CreateMemoryHandle(&handle, size, device));
-
-    const CUresult map_result = cuMemMap(address, size, 0, handle, 0);
-    if (map_result != CUDA_SUCCESS) {
-      return utils::ConvertCuResultNoAbort(map_result);
-    }
-
-    CUmemAccessDesc access_desc = {};
-    access_desc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-    access_desc.location.id = device;
-    access_desc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-    const CUresult access_result =
-        cuMemSetAccess(address, size, &access_desc, 1);
-    if (access_result != CUDA_SUCCESS) {
-      return utils::ConvertCuResultNoAbort(access_result);
-    }
+    RETURN_IF_CU_ERROR_AS_CUDA(vmm::CreateMemoryHandle(&handle, size, device));
+    RETURN_IF_CU_ERROR_AS_CUDA(cuMemMap(address, size, 0, handle, 0));
+    RETURN_IF_CU_ERROR_AS_CUDA(vmm::SetAccess(address, size, device));
 
     arena_metadata->arena_offset_handles[offset] = handle;
   }
@@ -581,9 +498,8 @@ cudaError_t ContextImpl::DeactivateArenaOffsets(
     if (kv.second.device != device || kv.second.tag != tag) {
       continue;
     }
-    if (arena_metadata != nullptr) {
-      return cudaErrorInvalidValue;
-    }
+    RETURN_IF_FALSE(arena_metadata == nullptr, cudaErrorInvalidValue,
+                    "DeactivateArenaOffsets: multiple matching arenas found");
     arena_base_ptr = kv.first;
     arena_metadata = &kv.second;
   }
@@ -596,22 +512,16 @@ cudaError_t ContextImpl::DeactivateArenaOffsets(
     const CUdeviceptr address =
         reinterpret_cast<CUdeviceptr>(arena_base_ptr) + static_cast<CUdeviceptr>(offset);
 
-    const CUresult unmap_result = cuMemUnmap(address, size);
-    if (unmap_result != CUDA_SUCCESS) {
-      return utils::ConvertCuResultNoAbort(unmap_result);
-    }
+    RETURN_IF_CU_ERROR_AS_CUDA(cuMemUnmap(address, size));
 
     const CUmemGenericAllocationHandle handle =
         arena_metadata->arena_offset_handles[offset];
 
-    const CUresult release_result = cuMemRelease(handle);
-    if (release_result != CUDA_SUCCESS) {
-      return utils::ConvertCuResultNoAbort(release_result);
-    }
+    RETURN_IF_CU_ERROR_AS_CUDA(cuMemRelease(handle));
     size_t minimum_granularity_bytes = 0;
-    RETURN_IF_CUDA_ERROR(
+    RETURN_IF_CU_ERROR_AS_CUDA(
         vmm::GetVmmMinimumGranularity(device, &minimum_granularity_bytes));
-    RETURN_IF_CUDA_ERROR(MapRangeToEmptyHandle(
+    RETURN_IF_CU_ERROR_AS_CUDA(MapRangeToEmptyHandle(
         address,
         size,
         arena_metadata->empty_handle,

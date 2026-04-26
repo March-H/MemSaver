@@ -89,21 +89,21 @@ class ContextImpl {
       uint64_t* out_count);
 
  private:
-  cudaError_t MallocRegular(
+  CUresult MallocRegular(
       void** ptr,
       CUdevice device,
       size_t size,
       const std::string& tag,
       bool enable_cpu_backup);
-  cudaError_t MallocArena(
+  CUresult MallocArena(
       void** ptr,
       CUdevice device,
       size_t size,
       const std::string& tag);
-  cudaError_t GetOrCreateSharedMinimumGranularityHandle(
+  CUresult GetOrCreateSharedMinimumGranularityHandle(
       CUdevice device,
       CUmemGenericAllocationHandle* out_handle);
-  cudaError_t MapRangeToEmptyHandle(
+  CUresult MapRangeToEmptyHandle(
       CUdeviceptr address,
       size_t size,
       CUmemGenericAllocationHandle empty_handle,

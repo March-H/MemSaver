@@ -4,10 +4,8 @@
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 
-#include <cstddef>
 #include <cstdlib>
 #include <iostream>
-#include <sstream>
 #include <string>
 
 #ifndef FATAL_ON_ERROR
@@ -28,23 +26,39 @@
 
 namespace memsaver::internal::utils {
 
-[[noreturn]] inline void AbortWithLog(
+inline void LogFailure(
     const std::string& message,
     const char* file,
     const char* func,
-    const int line) {
+    const int line,
+    const bool fatal = false) {
   std::cerr << "[memsaver] " << message << " file=" << file << " func=" << func
             << " line=" << line << std::endl;
-  std::abort();
+  if (fatal) {
+    std::abort();
+  }
 }
 
-inline void ReportError(
+inline cudaError_t FailCuda(
+    const cudaError_t error_code,
     const std::string& message,
     const char* file,
     const char* func,
-    const int line) {
-  std::cerr << "[memsaver] " << message << " file=" << file << " func=" << func
-            << " line=" << line << std::endl;
+    const int line,
+    const bool fatal = false) {
+  LogFailure(message, file, func, line, fatal);
+  return error_code;
+}
+
+inline CUresult FailCu(
+    const CUresult error_code,
+    const std::string& message,
+    const char* file,
+    const char* func,
+    const int line,
+    const bool fatal = false) {
+  LogFailure(message, file, func, line, fatal);
+  return error_code;
 }
 
 inline cudaError_t ConvertCuResult(const CUresult result) {
@@ -69,42 +83,30 @@ inline cudaError_t CheckCuda(
   if (error == cudaSuccess) {
     return cudaSuccess;
   }
-
-  std::ostringstream oss;
-  oss << "CUDA error from " << expr << ": code=" << static_cast<int>(error)
-      << " message=" << cudaGetErrorString(error);
-
-#if FATAL_ON_ERROR
-  AbortWithLog(oss.str(), file, func, line);
-#else
-  ReportError(oss.str(), file, func, line);
-#endif
-  return error;
+  return FailCuda(error,
+                  "CUDA error from " + std::string(expr) + ": code=" +
+                      std::to_string(static_cast<int>(error)) + " message=" +
+                      cudaGetErrorString(error),
+                  file, func, line, FATAL_ON_ERROR);
 }
 
-inline cudaError_t CheckCu(
+inline CUresult CheckCu(
     const CUresult result,
     const char* expr,
     const char* file,
     const char* func,
     const int line) {
   if (result == CUDA_SUCCESS) {
-    return cudaSuccess;
+    return CUDA_SUCCESS;
   }
 
   const char* error_string = nullptr;
   (void)cuGetErrorString(result, &error_string);
-
-  std::ostringstream oss;
-  oss << "CUresult error from " << expr << ": code=" << static_cast<int>(result)
-      << " message=" << (error_string == nullptr ? "Unknown error" : error_string);
-
-#if FATAL_ON_ERROR
-  AbortWithLog(oss.str(), file, func, line);
-#else
-  ReportError(oss.str(), file, func, line);
-#endif
-  return ConvertCuResult(result);
+  return FailCu(result,
+                "CUresult error from " + std::string(expr) + ": code=" +
+                    std::to_string(static_cast<int>(result)) + " message=" +
+                    (error_string == nullptr ? "Unknown error" : error_string),
+                file, func, line, FATAL_ON_ERROR);
 }
 
 inline cudaError_t Check(
@@ -117,18 +119,44 @@ inline cudaError_t Check(
   if (condition) {
     return cudaSuccess;
   }
-
-  ReportError(message, file, func, line);
-  return error_code;
+  return FailCuda(error_code, message, file, func, line);
 }
 
-inline cudaError_t ParseBool(const std::string& value, bool* out_value) {
+inline CUresult CheckCuCondition(
+    const bool condition,
+    const CUresult error_code,
+    const char* message,
+    const char* file,
+    const char* func,
+    const int line) {
+  if (condition) {
+    return CUDA_SUCCESS;
+  }
+  return FailCu(error_code, message, file, func, line);
+}
+
+inline cudaError_t ReadBoolEnvVar(
+    const char* name,
+    const bool default_value,
+    bool* out_value) {
+  if (name == nullptr) {
+    return FailCuda(cudaErrorInvalidValue,
+                    "ReadBoolEnvVar: name should not be null", __FILE__,
+                    __func__, __LINE__);
+  }
   if (out_value == nullptr) {
-    return Check(false, cudaErrorInvalidValue,
-                 "ParseBool: out_value should not be null", __FILE__, __func__,
-                 __LINE__);
+    return FailCuda(cudaErrorInvalidValue,
+                    "ReadBoolEnvVar: out_value should not be null", __FILE__,
+                    __func__, __LINE__);
   }
 
+  const char* raw = std::getenv(name);
+  if (raw == nullptr) {
+    *out_value = default_value;
+    return cudaSuccess;
+  }
+
+  const std::string value(raw);
   if (value == "1" || value == "true" || value == "TRUE" || value == "yes" ||
       value == "YES") {
     *out_value = true;
@@ -141,79 +169,33 @@ inline cudaError_t ParseBool(const std::string& value, bool* out_value) {
     return cudaSuccess;
   }
 
-  return cudaErrorInvalidValue;
-}
-
-inline cudaError_t ReadBoolEnvVar(
-    const char* name,
-    const bool default_value,
-    bool* out_value) {
-  if (name == nullptr) {
-    return Check(false, cudaErrorInvalidValue,
-                 "ReadBoolEnvVar: name should not be null", __FILE__, __func__,
-                 __LINE__);
-  }
-  if (out_value == nullptr) {
-    return Check(false, cudaErrorInvalidValue,
-                 "ReadBoolEnvVar: out_value should not be null", __FILE__,
-                 __func__, __LINE__);
-  }
-
-  const char* raw = std::getenv(name);
-  if (raw == nullptr) {
-    *out_value = default_value;
-    return cudaSuccess;
-  }
-
-  const cudaError_t status = ParseBool(raw, out_value);
-  if (status != cudaSuccess) {
-    const std::string message = std::string("Unsupported bool env value: ") + name +
-                                "=" + raw;
-    return Check(false, cudaErrorInvalidValue, message.c_str(), __FILE__,
-                 __func__, __LINE__);
-  }
-
-  return cudaSuccess;
+  return FailCuda(cudaErrorInvalidValue,
+                  std::string("Unsupported bool env value: ") + name + "=" +
+                      raw,
+                  __FILE__, __func__, __LINE__);
 }
 
 inline cudaError_t GetCurrentCudaDevice(CUdevice* out_device) {
   if (out_device == nullptr) {
-    return Check(false, cudaErrorInvalidValue,
-                 "GetCurrentCudaDevice: out_device should not be null", __FILE__,
-                 __func__, __LINE__);
+    return FailCuda(cudaErrorInvalidValue,
+                    "GetCurrentCudaDevice: out_device should not be null",
+                    __FILE__, __func__, __LINE__);
   }
 
   int device_ordinal = 0;
-  cudaError_t status = cudaGetDevice(&device_ordinal);
+  const cudaError_t status = cudaGetDevice(&device_ordinal);
   if (status != cudaSuccess) {
     return CheckCuda(status, "cudaGetDevice(&device_ordinal)", __FILE__,
                      __func__, __LINE__);
   }
 
-  const CUresult cu_status = cuDeviceGet(out_device, device_ordinal);
+  const CUresult cu_status = CheckCu(cuDeviceGet(out_device, device_ordinal),
+                                     "cuDeviceGet(out_device, device_ordinal)",
+                                     __FILE__, __func__, __LINE__);
   if (cu_status != CUDA_SUCCESS) {
-    return CheckCu(cu_status, "cuDeviceGet(out_device, device_ordinal)", __FILE__,
-                   __func__, __LINE__);
+    return ConvertCuResult(cu_status);
   }
   return cudaSuccess;
-}
-
-inline cudaError_t GetCudaDeviceByOrdinal(const int device_ordinal, CUdevice* out_device) {
-  if (out_device == nullptr) {
-    return Check(false, cudaErrorInvalidValue,
-                 "GetCudaDeviceByOrdinal: out_device should not be null", __FILE__,
-                 __func__, __LINE__);
-  }
-  const CUresult status = cuDeviceGet(out_device, device_ordinal);
-  if (status != CUDA_SUCCESS) {
-    return CheckCu(status, "cuDeviceGet(out_device, device_ordinal)", __FILE__,
-                   __func__, __LINE__);
-  }
-  return cudaSuccess;
-}
-
-inline cudaError_t ConvertCuResultNoAbort(const CUresult result) {
-  return result == CUDA_SUCCESS ? cudaSuccess : ConvertCuResult(result);
 }
 
 inline bool MatchesTag(const std::string& filter, const std::string& candidate) {
@@ -232,6 +214,16 @@ inline bool MatchesTag(const std::string& filter, const std::string& candidate) 
     }                                                                              \
   } while (false)
 
+#define RETURN_IF_CU_FALSE(COND, ERROR_CODE, MSG)                                  \
+  do {                                                                              \
+    const CUresult _status =                                                       \
+        ::memsaver::internal::utils::CheckCuCondition(                             \
+            (COND), (ERROR_CODE), (MSG), __FILE__, __func__, __LINE__);            \
+    if (_status != CUDA_SUCCESS) {                                                 \
+      return _status;                                                              \
+    }                                                                              \
+  } while (false)
+
 #define RETURN_IF_CUDA_ERROR(EXPR)                                                  \
   do {                                                                               \
     const cudaError_t _status =                                                    \
@@ -244,11 +236,21 @@ inline bool MatchesTag(const std::string& filter, const std::string& candidate) 
 
 #define RETURN_IF_CU_ERROR(EXPR)                                                    \
   do {                                                                               \
-    const cudaError_t _status =                                                    \
+    const CUresult _status =                                                       \
         ::memsaver::internal::utils::CheckCu((EXPR), #EXPR, __FILE__, __func__,    \
                                              __LINE__);                            \
-    if (_status != cudaSuccess) {                                                  \
+    if (_status != CUDA_SUCCESS) {                                                 \
       return _status;                                                              \
+    }                                                                              \
+  } while (false)
+
+#define RETURN_IF_CU_ERROR_AS_CUDA(EXPR)                                            \
+  do {                                                                               \
+    const CUresult _status =                                                       \
+        ::memsaver::internal::utils::CheckCu((EXPR), #EXPR, __FILE__, __func__,    \
+                                             __LINE__);                            \
+    if (_status != CUDA_SUCCESS) {                                                 \
+      return ::memsaver::internal::utils::ConvertCuResult(_status);                \
     }                                                                              \
   } while (false)
 
