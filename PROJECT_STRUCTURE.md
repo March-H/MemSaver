@@ -14,7 +14,7 @@ This document describes the current repository layout after the pure C++/CUDA mi
 │   └── internal/                     # Internal modules (non-public)
 └── tests/                            # C++ tests
     └── cpp/
-        ├── core_tests.cpp            # Core behavior tests
+        ├── basic_test.cpp            # Torch integration/basic behavior test
         └── preload_smoke.cpp         # Preload smoke test
 ```
 

@@ -68,18 +68,27 @@ memsaver_ctx_destroy(ctx);
 LD_PRELOAD=/path/to/libmemsaver_preload.so ./your_cuda_program
 ```
 
-Thread-local defaults can be configured via env vars:
-- `MEMSAVER_INIT_ENABLE` (`0/1`, `true/false`)
-- `MEMSAVER_INIT_ENABLE_CPU_BACKUP` (`0/1`, `true/false`)
-- `MEMSAVER_INIT_ALLOCATION_MODE` (`normal` or `arena`)
+Thread-local default interesting-region state can be configured via:
+- `MEMSAVER_ENABLE` (`0/1`, `true/false`)
+
+Notes:
+- `CPU backup` and `allocation mode` are configured only by preload control APIs.
+- Preload config is `thread_local`; child threads do not inherit parent-thread
+  runtime overrides automatically.
 
 The preload library also exports control symbols (for integration/tests):
 - `memsaver_preload_set_interesting_region`
 - `memsaver_preload_set_current_tag`
 - `memsaver_preload_set_enable_cpu_backup`
 - `memsaver_preload_set_allocation_mode`
+- `memsaver_preload_region_begin`
+- `memsaver_preload_region_end`
 - `memsaver_preload_pause`
 - `memsaver_preload_resume`
+
+`memsaver_preload_region_begin/end` provide a torch-style region:
+- inside region: allocations are routed to a tag-split private pool and managed by MemSaver
+- outside region: allocation follows current preload switch/config (e.g. default torch pool when disabled)
 
 ## Tests
 
@@ -88,7 +97,5 @@ ctest --test-dir build --output-on-failure
 ```
 
 Included tests:
-- core behavior (`pause/resume`, tag filtering, CPU backup)
-- arena behavior (`reuse`, `reset constraints`, `OOM`)
-- multi-GPU behavior (auto-skip if fewer than 2 GPUs)
 - preload smoke test (via `LD_PRELOAD`)
+- torch basic test (built only when Torch C++ package is found)

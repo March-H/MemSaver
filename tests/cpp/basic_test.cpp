@@ -131,6 +131,9 @@ using SetTagFn = cudaError_t (*)(const char*);
 using SetBackupFn = cudaError_t (*)(bool);
 using SetAllocationModeFn = cudaError_t (*)(memsaver_allocation_mode_t);
 using PauseResumeFn = cudaError_t (*)(const char*);
+using RegionBeginFn = cudaError_t (*)(const char*, bool);
+using RegionEndFn = cudaError_t (*)();
+using GetMetadataCountByTagFn = cudaError_t (*)(const char*, uint64_t*);
 using GetCpuBackupPointerFn =
     cudaError_t (*)(const uint8_t*, uint64_t, uint8_t**);
 
@@ -152,6 +155,9 @@ struct PreloadApi {
   SetAllocationModeFn set_mode = nullptr;
   PauseResumeFn pause = nullptr;
   PauseResumeFn resume = nullptr;
+  RegionBeginFn region_begin = nullptr;
+  RegionEndFn region_end = nullptr;
+  GetMetadataCountByTagFn get_metadata_count_by_tag = nullptr;
   GetCpuBackupPointerFn get_cpu_backup_pointer = nullptr;
 };
 
@@ -166,6 +172,11 @@ PreloadApi LoadPreloadApi() {
       "memsaver_preload_set_allocation_mode");
   api.pause = LoadSymbol<PauseResumeFn>("memsaver_preload_pause");
   api.resume = LoadSymbol<PauseResumeFn>("memsaver_preload_resume");
+  api.region_begin =
+      LoadSymbol<RegionBeginFn>("memsaver_preload_region_begin");
+  api.region_end = LoadSymbol<RegionEndFn>("memsaver_preload_region_end");
+  api.get_metadata_count_by_tag = LoadSymbol<GetMetadataCountByTagFn>(
+      "memsaver_preload_get_metadata_count_by_tag");
   api.get_cpu_backup_pointer = LoadSymbol<GetCpuBackupPointerFn>(
       "memsaver_preload_get_cpu_backup_pointer");
   return api;
@@ -191,6 +202,26 @@ void CheckManagedMetadataExistsForTensor(
   CheckCuda(status, label);
   CheckTrue(cpu_backup == nullptr,
             "active managed allocation should expose null cpu backup pointer");
+}
+
+void ExpectMetadataCountByTag(
+    const PreloadApi& api,
+    const char* tag,
+    const uint64_t expected_count,
+    const char* label) {
+  uint64_t observed_count = 0;
+  CheckCuda(
+      api.get_metadata_count_by_tag(tag, &observed_count),
+      "get_metadata_count_by_tag");
+  std::cout << "[basic_test] " << label << " observed count == "
+            << observed_count << std::endl;
+  if (observed_count == expected_count) {
+    return;
+  }
+  std::cerr << "[basic_test] " << label << " expected count == "
+            << expected_count << " but observed " << observed_count
+            << std::endl;
+  std::exit(1);
 }
 
 void WarmUpRegularBytes(
@@ -244,16 +275,16 @@ void TestCase1NaiveAllocations(const PreloadApi& api) {
   }
   ConfigureRegularRegion(api, "naive", /*enable_cpu_backup=*/false);
   const uint64_t baseline = DeviceUsedBytes();
+  const uint64_t expected_naive_total =
+      kAligned2MiB + 20ULL * kMiB + 100ULL * kMiB;
 
   auto t1 = AllocBytesTensor(1ULL * kMiB);
   auto t2 = AllocBytesTensor(20ULL * kMiB);
   auto t3 = AllocBytesTensor(100ULL * kMiB);
   SyncCuda();
 
-  ExpectDeltaExact(
-      baseline,
-      kAligned2MiB + 20ULL * kMiB + 100ULL * kMiB,
-      "case1 naive total bytes");
+  ExpectDeltaExact(baseline, expected_naive_total, "case1 naive total bytes");
+  const uint64_t alloc_delta = CurrentDeltaBytes(baseline);
 
   CheckManagedMetadataExistsForTensor(
       api, t1, "get_cpu_backup_pointer(case1:t1)");
@@ -261,12 +292,23 @@ void TestCase1NaiveAllocations(const PreloadApi& api) {
       api, t2, "get_cpu_backup_pointer(case1:t2)");
   CheckManagedMetadataExistsForTensor(
       api, t3, "get_cpu_backup_pointer(case1:t3)");
+  ExpectMetadataCountByTag(api, "naive", 3ULL, "case1 metadata count(naive)");
 
   const uintptr_t addr1 = TensorAddress(t1);
   const uintptr_t addr2 = TensorAddress(t2);
   const uintptr_t addr3 = TensorAddress(t3);
   CheckCuda(api.pause("naive"), "pause(naive) case1");
+  SyncCuda();
+  const uint64_t paused_delta = CurrentDeltaBytes(baseline);
+  ExpectDeltaExact(baseline, 0ULL, "case1 paused delta");
+  ExpectReleasedExact(
+      alloc_delta,
+      paused_delta,
+      expected_naive_total,
+      "case1 pause(naive) released bytes");
   CheckCuda(api.resume("naive"), "resume(naive) case1");
+  SyncCuda();
+  ExpectDeltaExact(baseline, expected_naive_total, "case1 resume delta");
   CheckTrue(TensorAddress(t1) == addr1, "case1 t1 address changed");
   CheckTrue(TensorAddress(t2) == addr2, "case1 t2 address changed");
   CheckTrue(TensorAddress(t3) == addr3, "case1 t3 address changed");
@@ -379,17 +421,16 @@ void TestCase4MatmulWithTags(const PreloadApi& api) {
       torch::TensorOptions().dtype(torch::kFloat16).device(torch::kCUDA);
   const uint64_t baseline = DeviceUsedBytes();
 
-  CheckCuda(api.set_interesting(true), "set_interesting(true) case4");
-  CheckCuda(api.set_mode(MEMSAVER_ALLOCATION_MODE_NORMAL), "set_mode(normal) case4");
-  CheckCuda(api.set_backup(false), "set_backup(false) case4");
-  CheckCuda(api.set_tag("MatA"), "set_tag(MatA)");
+  CheckCuda(api.region_begin("MatA", false), "region_begin(MatA) case4");
   auto a = torch::randn({512, 512}, fp16_cuda);
   SyncCuda();
+  CheckCuda(api.region_end(), "region_end(MatA) case4");
   ExpectDeltaExact(baseline, 2ULL * kMiB, "case4 after MatA");
 
-  CheckCuda(api.set_tag("MatB"), "set_tag(MatB)");
+  CheckCuda(api.region_begin("MatB", false), "region_begin(MatB) case4");
   auto b = torch::randn({512, 4096}, fp16_cuda);
   SyncCuda();
+  CheckCuda(api.region_end(), "region_end(MatB) case4");
   ExpectDeltaExact(baseline, 22ULL * kMiB, "case4 after MatB");
 
   CheckCuda(api.set_interesting(false), "set_interesting(false) case4 matmul");
@@ -408,37 +449,46 @@ void TestCase4MatmulWithTags(const PreloadApi& api) {
       api, a, "get_cpu_backup_pointer(case4:MatA)");
   CheckManagedMetadataExistsForTensor(
       api, b, "get_cpu_backup_pointer(case4:MatB)");
-  const uint64_t final_delta = CurrentDeltaBytes(baseline);
-  ExpectDeltaExact(baseline, final_delta, "case4 final delta");
+  ExpectMetadataCountByTag(api, "MatA", 1ULL, "case4 metadata count(MatA)");
+  ExpectMetadataCountByTag(api, "MatB", 1ULL, "case4 metadata count(MatB)");
+  constexpr uint64_t kCase4FinalDelta = 42ULL * kMiB;
+  ExpectDeltaExact(baseline, kCase4FinalDelta, "case4 final delta");
 
-  // Ensure there are exactly two live managed metadata entries: MatA and MatB.
-  // Release amount must be exactly MatA(2MB) + MatB(20MB) = 22MB.
   CheckCuda(api.pause(nullptr), "pause(all) case4");
   SyncCuda();
   const uint64_t paused_all_delta = CurrentDeltaBytes(baseline);
   ExpectReleasedExact(
-      final_delta, paused_all_delta, 22ULL * kMiB, "case4 pause(all) released bytes");
+      kCase4FinalDelta,
+      paused_all_delta,
+      22ULL * kMiB,
+      "case4 pause(all) released bytes");
   CheckCuda(api.resume(nullptr), "resume(all) case4");
   SyncCuda();
-  ExpectDeltaExact(baseline, final_delta, "case4 resume(all) delta");
+  ExpectDeltaExact(baseline, kCase4FinalDelta, "case4 resume(all) delta");
 
   CheckCuda(api.pause("MatA"), "pause(MatA) case4");
   SyncCuda();
   const uint64_t paused_mat_a_delta = CurrentDeltaBytes(baseline);
   ExpectReleasedExact(
-      final_delta, paused_mat_a_delta, 2ULL * kMiB, "case4 pause(MatA) released bytes");
+      kCase4FinalDelta,
+      paused_mat_a_delta,
+      2ULL * kMiB,
+      "case4 pause(MatA) released bytes");
   CheckCuda(api.resume("MatA"), "resume(MatA) case4");
   SyncCuda();
-  ExpectDeltaExact(baseline, final_delta, "case4 resume(MatA) delta");
+  ExpectDeltaExact(baseline, kCase4FinalDelta, "case4 resume(MatA) delta");
 
   CheckCuda(api.pause("MatB"), "pause(MatB) case4");
   SyncCuda();
   const uint64_t paused_mat_b_delta = CurrentDeltaBytes(baseline);
   ExpectReleasedExact(
-      final_delta, paused_mat_b_delta, 20ULL * kMiB, "case4 pause(MatB) released bytes");
+      kCase4FinalDelta,
+      paused_mat_b_delta,
+      20ULL * kMiB,
+      "case4 pause(MatB) released bytes");
   CheckCuda(api.resume("MatB"), "resume(MatB) case4");
   SyncCuda();
-  ExpectDeltaExact(baseline, final_delta, "case4 resume(MatB) delta");
+  ExpectDeltaExact(baseline, kCase4FinalDelta, "case4 resume(MatB) delta");
 
   a.reset();
   b.reset();
@@ -489,14 +539,16 @@ void TestCase5GemmSameThread(const PreloadApi& api) {
   ConfigureRegularRegion(api, "gemm", /*enable_cpu_backup=*/false);
   const uint64_t baseline = DeviceUsedBytes();
 
-  const GemmResult result = GemmFunc();
-  SyncCuda();
-  ExpectDeltaExact(baseline, 22ULL * kMiB, "case5 gemm delta");
-  CheckGemmResultLayout(result, "case5");
-  CheckManagedMetadataExistsForTensor(
-      api, result.b, "get_cpu_backup_pointer(case5:B)");
-  CheckManagedMetadataExistsForTensor(
-      api, result.c, "get_cpu_backup_pointer(case5:C)");
+  {
+    const GemmResult result = GemmFunc();
+    SyncCuda();
+    ExpectDeltaExact(baseline, 22ULL * kMiB, "case5 gemm delta");
+    CheckGemmResultLayout(result, "case5");
+    CheckManagedMetadataExistsForTensor(
+        api, result.b, "get_cpu_backup_pointer(case5:B)");
+    CheckManagedMetadataExistsForTensor(
+        api, result.c, "get_cpu_backup_pointer(case5:C)");
+  }
 
   EmptyTorchCache();
 }
@@ -508,79 +560,117 @@ struct ThreadedGemmOutput {
 };
 
 void TestCase6GemmChildThread(const PreloadApi& api) {
+  const char* old_enable = std::getenv("MEMSAVER_ENABLE");
+  const bool had_old_enable = old_enable != nullptr;
+  const std::string old_enable_value = had_old_enable ? old_enable : "";
+
+  // Warmup in child thread, then clear cache before case6 assertions.
   {
-    {
-      ThreadedGemmOutput warmup_output;
-      std::thread warmup_worker([&]() {
-        warmup_output.setup_status = api.set_interesting(false);
-        if (warmup_output.setup_status != cudaSuccess) {
-          warmup_output.setup_error = "set_interesting(false) warmup";
-          return;
-        }
-        warmup_output.result = GemmFunc();
-      });
-      warmup_worker.join();
-      if (warmup_output.setup_status != cudaSuccess) {
-        std::cerr << "[basic_test] case6 warmup failed at "
-                  << warmup_output.setup_error << ": "
-                  << cudaGetErrorString(warmup_output.setup_status) << std::endl;
-        std::exit(1);
-      }
-    }
+    CheckTrue(unsetenv("MEMSAVER_ENABLE") == 0,
+              "unsetenv MEMSAVER_ENABLE case6 warmup");
+    CheckCuda(api.set_interesting(false), "set_interesting(false) case6 warmup");
+    std::thread warmup_worker([]() {
+      const GemmResult warm_result = GemmFunc();
+      (void)warm_result;
+      SyncCuda();
+    });
+    warmup_worker.join();
     EmptyTorchCache();
   }
-  const uint64_t baseline = DeviceUsedBytes();
 
-  ThreadedGemmOutput output;
-  std::thread worker([&]() {
-    try {
-      output.setup_status = api.set_interesting(true);
-      if (output.setup_status != cudaSuccess) {
-        output.setup_error = "set_interesting(true)";
-        return;
+  // Subcase A: no MEMSAVER_ENABLE in child-thread config => unmanaged.
+  {
+    CheckTrue(unsetenv("MEMSAVER_ENABLE") == 0,
+              "unsetenv MEMSAVER_ENABLE case6 subcaseA");
+    CheckCuda(api.set_interesting(false), "set_interesting(false) case6 subcaseA");
+
+    ThreadedGemmOutput output;
+    std::thread worker([&]() {
+      try {
+        output.result = GemmFunc();
+      } catch (const std::exception& e) {
+        output.setup_status = cudaErrorUnknown;
+        output.setup_error = e.what();
+      } catch (...) {
+        output.setup_status = cudaErrorUnknown;
+        output.setup_error = "unknown exception";
       }
-      output.setup_status = api.set_mode(MEMSAVER_ALLOCATION_MODE_NORMAL);
-      if (output.setup_status != cudaSuccess) {
-        output.setup_error = "set_mode(normal)";
-        return;
-      }
-      output.setup_status = api.set_backup(false);
-      if (output.setup_status != cudaSuccess) {
-        output.setup_error = "set_backup(false)";
-        return;
-      }
-      output.setup_status = api.set_tag("gemm");
-      if (output.setup_status != cudaSuccess) {
-        output.setup_error = "set_tag(gemm)";
-        return;
-      }
-      output.result = GemmFunc();
-    } catch (const std::exception& e) {
-      output.setup_status = cudaErrorUnknown;
-      output.setup_error = e.what();
-    } catch (...) {
-      output.setup_status = cudaErrorUnknown;
-      output.setup_error = "unknown exception";
+    });
+    worker.join();
+
+    if (output.setup_status != cudaSuccess) {
+      std::cerr << "[basic_test] case6 subcaseA worker setup failed at "
+                << output.setup_error << ": "
+                << cudaGetErrorString(output.setup_status) << std::endl;
+      std::exit(1);
     }
-  });
-  worker.join();
 
-  if (output.setup_status != cudaSuccess) {
-    std::cerr << "[basic_test] case6 worker setup failed at "
-              << output.setup_error << ": "
-              << cudaGetErrorString(output.setup_status) << std::endl;
-    std::exit(1);
+    SyncCuda();
+    uint8_t* cpu_ptr = nullptr;
+    const cudaError_t b_status = api.get_cpu_backup_pointer(
+        static_cast<const uint8_t*>(output.result.b.data_ptr()), 16, &cpu_ptr);
+    CheckTrue(
+        b_status == cudaErrorInvalidValue,
+        "case6 subcaseA expected B to be unmanaged (metadata lookup should fail)");
+    const cudaError_t c_status = api.get_cpu_backup_pointer(
+        static_cast<const uint8_t*>(output.result.c.data_ptr()), 16, &cpu_ptr);
+    CheckTrue(
+        c_status == cudaErrorInvalidValue,
+        "case6 subcaseA expected C to be unmanaged (metadata lookup should fail)");
+
+    output.result.b.reset();
+    output.result.c.reset();
+    EmptyTorchCache();
   }
 
-  SyncCuda();
-  ExpectDeltaExact(baseline, 22ULL * kMiB, "case6 gemm delta");
-  CheckGemmResultLayout(output.result, "case6");
-  CheckManagedMetadataExistsForTensor(
-      api, output.result.b, "get_cpu_backup_pointer(case6:B)");
-  CheckManagedMetadataExistsForTensor(
-      api, output.result.c, "get_cpu_backup_pointer(case6:C)");
+  // Subcase B: MEMSAVER_ENABLE=1 for child thread => managed.
+  {
+    CheckTrue(setenv("MEMSAVER_ENABLE", "1", 1) == 0,
+              "setenv MEMSAVER_ENABLE=1 case6");
+    const uint64_t baseline = DeviceUsedBytes();
 
-  EmptyTorchCache();
+    ThreadedGemmOutput output;
+    std::thread worker([&]() {
+      try {
+        output.result = GemmFunc();
+      } catch (const std::exception& e) {
+        output.setup_status = cudaErrorUnknown;
+        output.setup_error = e.what();
+      } catch (...) {
+        output.setup_status = cudaErrorUnknown;
+        output.setup_error = "unknown exception";
+      }
+    });
+    worker.join();
+
+    if (output.setup_status != cudaSuccess) {
+      std::cerr << "[basic_test] case6 subcaseB worker setup failed at "
+                << output.setup_error << ": "
+                << cudaGetErrorString(output.setup_status) << std::endl;
+      std::exit(1);
+    }
+
+    SyncCuda();
+    ExpectDeltaExact(baseline, 22ULL * kMiB, "case6 subcaseB managed delta");
+    CheckGemmResultLayout(output.result, "case6 subcaseB");
+    CheckManagedMetadataExistsForTensor(
+        api, output.result.b, "get_cpu_backup_pointer(case6:B)");
+    CheckManagedMetadataExistsForTensor(
+        api, output.result.c, "get_cpu_backup_pointer(case6:C)");
+
+    output.result.b.reset();
+    output.result.c.reset();
+    EmptyTorchCache();
+  }
+
+  if (had_old_enable) {
+    CheckTrue(setenv("MEMSAVER_ENABLE", old_enable_value.c_str(), 1) == 0,
+              "restore MEMSAVER_ENABLE case6");
+  } else {
+    CheckTrue(unsetenv("MEMSAVER_ENABLE") == 0,
+              "unsetenv MEMSAVER_ENABLE case6 restore");
+  }
+  CheckCuda(api.set_interesting(false), "set_interesting(false) case6 restore");
 }
 
 void TestCase7BasicPauseResumeNoBackup(const PreloadApi& api) {

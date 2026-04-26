@@ -4,7 +4,7 @@
 
 #include <mutex>
 
-#include "internal/common.h"
+#include "internal/utils.h"
 
 namespace memsaver::internal {
 namespace {
@@ -21,8 +21,8 @@ CudaFreeFn g_original_cuda_free = nullptr;
 
 // Resolve original cudaMalloc symbol and cache the function pointer.
 cudaError_t ResolveOriginalCudaMalloc(CudaMallocFn* out_fn) {
-  MEMSAVER_RETURN_IF_FALSE(out_fn != nullptr, cudaErrorInvalidValue,
-                           "ResolveOriginalCudaMalloc: out_fn should not be null");
+  RETURN_IF_FALSE(out_fn != nullptr, cudaErrorInvalidValue,
+                  "ResolveOriginalCudaMalloc: out_fn should not be null");
 
   std::lock_guard<std::mutex> lock(g_symbol_mutex);
   if (g_original_cuda_malloc != nullptr) {
@@ -37,7 +37,7 @@ cudaError_t ResolveOriginalCudaMalloc(CudaMallocFn* out_fn) {
     const std::string message =
         std::string("dlsym failed for cudaMalloc: ") +
         (dl_error == nullptr ? "<null>" : dl_error);
-    MEMSAVER_RETURN_IF_FALSE(false, cudaErrorUnknown, message.c_str());
+    RETURN_IF_FALSE(false, cudaErrorUnknown, message.c_str());
   }
 
   g_original_cuda_malloc = reinterpret_cast<CudaMallocFn>(symbol);
@@ -47,8 +47,8 @@ cudaError_t ResolveOriginalCudaMalloc(CudaMallocFn* out_fn) {
 
 // Resolve original cudaFree symbol and cache the function pointer.
 cudaError_t ResolveOriginalCudaFree(CudaFreeFn* out_fn) {
-  MEMSAVER_RETURN_IF_FALSE(out_fn != nullptr, cudaErrorInvalidValue,
-                           "ResolveOriginalCudaFree: out_fn should not be null");
+  RETURN_IF_FALSE(out_fn != nullptr, cudaErrorInvalidValue,
+                  "ResolveOriginalCudaFree: out_fn should not be null");
 
   std::lock_guard<std::mutex> lock(g_symbol_mutex);
   if (g_original_cuda_free != nullptr) {
@@ -63,7 +63,7 @@ cudaError_t ResolveOriginalCudaFree(CudaFreeFn* out_fn) {
     const std::string message =
         std::string("dlsym failed for cudaFree: ") +
         (dl_error == nullptr ? "<null>" : dl_error);
-    MEMSAVER_RETURN_IF_FALSE(false, cudaErrorUnknown, message.c_str());
+    RETURN_IF_FALSE(false, cudaErrorUnknown, message.c_str());
   }
 
   g_original_cuda_free = reinterpret_cast<CudaFreeFn>(symbol);
@@ -78,15 +78,15 @@ cudaError_t OriginalCudaApi::Malloc(
     void** ptr,
     const size_t size,
     const bool use_original_cuda_symbols) {
-  MEMSAVER_RETURN_IF_FALSE(ptr != nullptr, cudaErrorInvalidValue,
-                           "OriginalCudaApi::Malloc: ptr should not be null");
+  RETURN_IF_FALSE(ptr != nullptr, cudaErrorInvalidValue,
+                  "OriginalCudaApi::Malloc: ptr should not be null");
 
   if (!use_original_cuda_symbols) {
     return cudaMalloc(ptr, size);
   }
 
   CudaMallocFn fn = nullptr;
-  MEMSAVER_RETURN_IF_CUDA_ERROR(ResolveOriginalCudaMalloc(&fn));
+  RETURN_IF_CUDA_ERROR(ResolveOriginalCudaMalloc(&fn));
   return fn(ptr, size);
 }
 
@@ -97,7 +97,7 @@ cudaError_t OriginalCudaApi::Free(void* ptr, const bool use_original_cuda_symbol
   }
 
   CudaFreeFn fn = nullptr;
-  MEMSAVER_RETURN_IF_CUDA_ERROR(ResolveOriginalCudaFree(&fn));
+  RETURN_IF_CUDA_ERROR(ResolveOriginalCudaFree(&fn));
   return fn(ptr);
 }
 

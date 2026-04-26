@@ -109,19 +109,6 @@ class Context {
     return memsaver_resume(ctx_, tag_or_null);
   }
 
-  /** Configure arena for current device and tag. */
-  cudaError_t ConfigureArena(
-      const char* tag,
-      uint64_t capacity_bytes,
-      memsaver_arena_create_mode_t create_mode) noexcept {
-    return memsaver_configure_arena(ctx_, tag, capacity_bytes, create_mode);
-  }
-
-  /** Reset arena offset to zero for current device and tag. */
-  cudaError_t ResetArena(const char* tag) noexcept {
-    return memsaver_reset_arena(ctx_, tag);
-  }
-
   /** Activate virtual-only arena offsets with real device mappings. */
   cudaError_t ActivateArenaOffsets(
       const char* tag,
@@ -142,9 +129,11 @@ class Context {
         ctx_, tag, offsets, num_offsets, size_bytes);
   }
 
-  /** Set free-memory safety margin in bytes before regular allocations. */
-  cudaError_t SetMemoryMarginBytes(uint64_t value) noexcept {
-    return memsaver_set_memory_margin_bytes(ctx_, value);
+  /** Query count of live metadata entries that match a tag exactly. */
+  cudaError_t GetMetadataCountByTag(
+      const char* tag,
+      uint64_t* out_count) noexcept {
+    return memsaver_get_metadata_count_by_tag(ctx_, tag, out_count);
   }
 
   /** Query CPU backup pointer for a GPU range in paused state. */

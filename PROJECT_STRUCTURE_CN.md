@@ -14,7 +14,7 @@
 │   └── internal/                     # 内部模块（非公开）
 └── tests/                            # C++ 测试
     └── cpp/
-        ├── core_tests.cpp            # 核心行为测试
+        ├── basic_test.cpp            # Torch 集成/基础行为测试
         └── preload_smoke.cpp         # preload 冒烟测试
 ```
 

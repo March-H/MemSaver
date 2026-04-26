@@ -18,17 +18,9 @@ typedef struct memsaver_ctx memsaver_ctx_t;
 typedef enum memsaver_allocation_mode {
   /** Allocate regular VMM-backed blocks with per-allocation metadata. */
   MEMSAVER_ALLOCATION_MODE_NORMAL = 0,
-  /** Allocate from a pre-configured per-(device, tag) arena. */
+  /** Allocate one arena-style segment per allocation request. */
   MEMSAVER_ALLOCATION_MODE_ARENA = 1,
 } memsaver_allocation_mode_t;
-
-/** Arena creation strategy used by memsaver_configure_arena. */
-typedef enum memsaver_arena_create_mode {
-  /** Reserve VA and immediately map one full-size physical handle. */
-  MEMSAVER_ARENA_CREATE_MODE_FULLY_MAPPED = 0,
-  /** Reserve VA only and prepare shared minimum-granularity handle lazily. */
-  MEMSAVER_ARENA_CREATE_MODE_VIRTUAL_ONLY = 1,
-} memsaver_arena_create_mode_t;
 
 /**
  * Create a MemSaver context.
@@ -182,45 +174,17 @@ cudaError_t memsaver_pause(memsaver_ctx_t* ctx, const char* tag_or_null);
 cudaError_t memsaver_resume(memsaver_ctx_t* ctx, const char* tag_or_null);
 
 /**
- * Configure or resize an arena for current device and tag.
- *
- * Existing arena can be reconfigured only when it has no live allocations.
- *
- * @param ctx MemSaver context.
- * @param tag Non-empty arena tag.
- * @param capacity_bytes Arena capacity in bytes.
- * @param create_mode Arena creation mode.
- * @return cudaSuccess, cudaErrorInvalidValue, or CUDA allocation errors.
- */
-cudaError_t memsaver_configure_arena(
-    memsaver_ctx_t* ctx,
-    const char* tag,
-    uint64_t capacity_bytes,
-    memsaver_arena_create_mode_t create_mode);
-
-/**
- * Reset arena offset to zero for current device and tag.
- *
- * Reset is allowed only when the arena has no live allocations.
- *
- * @param ctx MemSaver context.
- * @param tag Non-empty arena tag.
- * @return cudaSuccess or cudaErrorInvalidValue.
- */
-cudaError_t memsaver_reset_arena(memsaver_ctx_t* ctx, const char* tag);
-
-/**
  * Activate real device mappings for offset ranges in a virtual-only arena.
  *
  * Each range is [offsets[i], offsets[i] + size_bytes) relative to arena base.
- * All offsets and size_bytes must be aligned to the arena minimum granularity.
+ * Offsets are applied in order and the function returns on the first error.
  *
  * @param ctx MemSaver context.
  * @param tag Non-empty arena tag.
  * @param offsets Array of byte offsets relative to arena base.
  * @param num_offsets Number of offsets in the array.
  * @param size_bytes Range size for each offset.
- * @return cudaSuccess, cudaErrorInvalidValue, cudaErrorNotSupported, or CUDA errors.
+ * @return cudaSuccess, cudaErrorInvalidValue, or CUDA errors.
  */
 cudaError_t memsaver_activate_arena_offsets(
     memsaver_ctx_t* ctx,
@@ -232,15 +196,14 @@ cudaError_t memsaver_activate_arena_offsets(
 /**
  * Deactivate real mappings and map shared empty handle back for offset ranges.
  *
- * Each requested range must exactly match an active binding created by
- * memsaver_activate_arena_offsets.
+ * Offsets are processed in order and the function returns on the first error.
  *
  * @param ctx MemSaver context.
  * @param tag Non-empty arena tag.
  * @param offsets Array of byte offsets relative to arena base.
  * @param num_offsets Number of offsets in the array.
  * @param size_bytes Range size for each offset.
- * @return cudaSuccess, cudaErrorInvalidValue, cudaErrorNotSupported, or CUDA errors.
+ * @return cudaSuccess, cudaErrorInvalidValue, or CUDA errors.
  */
 cudaError_t memsaver_deactivate_arena_offsets(
     memsaver_ctx_t* ctx,
@@ -250,28 +213,38 @@ cudaError_t memsaver_deactivate_arena_offsets(
     uint64_t size_bytes);
 
 /**
- * Set safety margin in bytes required to remain free before regular allocate.
+ * Count live allocation metadata entries matching a tag.
  *
- * If free memory would drop below margin, allocation returns OOM.
+ * This counts current entries tracked in MemSaver internal metadata map.
  *
  * @param ctx MemSaver context.
- * @param value Required free-memory margin in bytes.
- * @return cudaSuccess or an error if ctx is invalid.
+ * @param tag Tag to match exactly.
+ * @param out_count Output count.
+ * @return cudaSuccess or cudaErrorInvalidValue for invalid arguments.
  */
-cudaError_t memsaver_set_memory_margin_bytes(memsaver_ctx_t* ctx, uint64_t value);
+cudaError_t memsaver_get_metadata_count_by_tag(
+    memsaver_ctx_t* ctx,
+    const char* tag,
+    uint64_t* out_count);
 
 /**
- * Query CPU backup pointer corresponding to a managed GPU memory range.
+ * Query host backup address for a GPU subrange.
  *
- * If allocation is active, out_cpu_ptr is set to null and cudaSuccess is
- * returned. If allocation is paused with backup, out_cpu_ptr points to host
- * backup at matching offset.
+ * This API is for observability/integration checks (including tests), not for
+ * normal allocation/free flow control.
+ *
+ * Query range is [gpu_ptr, gpu_ptr + size) and must be fully covered by one
+ * managed REGULAR allocation.
+ *
+ * On success:
+ * - active allocation: *out_cpu_ptr = NULL
+ * - paused allocation with CPU backup: *out_cpu_ptr = backup_base + offset
  *
  * @param ctx MemSaver context.
- * @param gpu_ptr Query GPU pointer.
+ * @param gpu_ptr Start address of query range on GPU.
  * @param size Query size in bytes.
- * @param out_cpu_ptr Output host pointer or null.
- * @return cudaSuccess or cudaErrorInvalidValue when lookup is invalid.
+ * @param out_cpu_ptr Output host pointer (or NULL for active allocation).
+ * @return cudaSuccess on valid lookup; cudaErrorInvalidValue otherwise.
  */
 cudaError_t memsaver_get_cpu_backup_pointer(
     memsaver_ctx_t* ctx,
