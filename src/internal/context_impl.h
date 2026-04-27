@@ -1,5 +1,5 @@
-#ifndef MEMSAVER_INTERNAL_CONTEXT_IMPL_H_
-#define MEMSAVER_INTERNAL_CONTEXT_IMPL_H_
+#ifndef CONTEXT_IMPL_H_
+#define CONTEXT_IMPL_H_
 
 #include <cuda.h>
 #include <cuda_runtime_api.h>
@@ -9,10 +9,6 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
-
-#include "memsaver/memsaver_c.h"
-
-namespace memsaver::internal {
 
 /** State of a managed regular allocation. */
 enum class AllocationState {
@@ -45,17 +41,19 @@ struct RuntimeConfig {
   bool interesting_region = false;
   bool enable_cpu_backup = false;
   std::string tag = "default";
-  memsaver_allocation_mode_t allocation_mode = MEMSAVER_ALLOCATION_MODE_NORMAL;
+  AllocationKind allocation_mode = AllocationKind::REGULAR;
 };
 
 /** Internal core implementation shared by C API and preload API. */
 class ContextImpl {
  public:
-  explicit ContextImpl(bool use_original_cuda_symbols);
+  explicit ContextImpl();
   ~ContextImpl();
 
   ContextImpl(const ContextImpl&) = delete;
   ContextImpl& operator=(const ContextImpl&) = delete;
+
+  static ContextImpl& instance();
 
   cudaError_t Malloc(
       void** ptr,
@@ -111,13 +109,10 @@ class ContextImpl {
 
   void ReleaseAllocationForShutdown(void* ptr, const AllocationMetadata& metadata);
 
-  const bool use_original_cuda_symbols_;
   std::mutex mutex_;
   std::unordered_map<void*, AllocationMetadata> allocations_;
   std::unordered_map<CUdevice, CUmemGenericAllocationHandle>
       shared_minimum_granularity_handles_;
 };
 
-}  // namespace memsaver::internal
-
-#endif  // MEMSAVER_INTERNAL_CONTEXT_IMPL_H_
+#endif  // CONTEXT_IMPL_H_

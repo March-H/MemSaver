@@ -24,7 +24,16 @@
 #define UNLIKELY(expr) (expr)
 #endif
 
-namespace memsaver::internal::utils {
+inline void LogMessage(
+    std::ostream& stream,
+    const char* level,
+    const std::string& message,
+    const char* file,
+    const char* func,
+    const int line) {
+  stream << "[memsaver][" << level << "] " << message << " file=" << file
+         << " func=" << func << " line=" << line << std::endl;
+}
 
 inline void LogFailure(
     const std::string& message,
@@ -32,12 +41,15 @@ inline void LogFailure(
     const char* func,
     const int line,
     const bool fatal = false) {
-  std::cerr << "[memsaver] " << message << " file=" << file << " func=" << func
-            << " line=" << line << std::endl;
+  LogMessage(std::cerr, "E", message, file, func, line);
   if (fatal) {
     std::abort();
   }
 }
+
+#define LOGI(MSG) LogMessage(std::cout, "I", (MSG), __FILE__, __func__, __LINE__)
+#define LOGW(MSG) LogMessage(std::cerr, "W", (MSG), __FILE__, __func__, __LINE__)
+#define LOGE(MSG) LogMessage(std::cerr, "E", (MSG), __FILE__, __func__, __LINE__)
 
 inline cudaError_t FailCuda(
     const cudaError_t error_code,
@@ -202,12 +214,10 @@ inline bool MatchesTag(const std::string& filter, const std::string& candidate) 
   return filter.empty() || filter == candidate;
 }
 
-}  // namespace memsaver::internal::utils
-
 #define RETURN_IF_FALSE(COND, ERROR_CODE, MSG)                                     \
   do {                                                                              \
     const cudaError_t _status =                                                    \
-        ::memsaver::internal::utils::Check((COND), (ERROR_CODE), (MSG), __FILE__,  \
+        Check((COND), (ERROR_CODE), (MSG), __FILE__,  \
                                            __func__, __LINE__);                    \
     if (_status != cudaSuccess) {                                                  \
       return _status;                                                              \
@@ -217,7 +227,7 @@ inline bool MatchesTag(const std::string& filter, const std::string& candidate) 
 #define RETURN_IF_CU_FALSE(COND, ERROR_CODE, MSG)                                  \
   do {                                                                              \
     const CUresult _status =                                                       \
-        ::memsaver::internal::utils::CheckCuCondition(                             \
+        CheckCuCondition(                             \
             (COND), (ERROR_CODE), (MSG), __FILE__, __func__, __LINE__);            \
     if (_status != CUDA_SUCCESS) {                                                 \
       return _status;                                                              \
@@ -227,7 +237,7 @@ inline bool MatchesTag(const std::string& filter, const std::string& candidate) 
 #define RETURN_IF_CUDA_ERROR(EXPR)                                                  \
   do {                                                                               \
     const cudaError_t _status =                                                    \
-        ::memsaver::internal::utils::CheckCuda((EXPR), #EXPR, __FILE__, __func__,  \
+        CheckCuda((EXPR), #EXPR, __FILE__, __func__,  \
                                                __LINE__);                          \
     if (_status != cudaSuccess) {                                                  \
       return _status;                                                              \
@@ -237,7 +247,7 @@ inline bool MatchesTag(const std::string& filter, const std::string& candidate) 
 #define RETURN_IF_CU_ERROR(EXPR)                                                    \
   do {                                                                               \
     const CUresult _status =                                                       \
-        ::memsaver::internal::utils::CheckCu((EXPR), #EXPR, __FILE__, __func__,    \
+        CheckCu((EXPR), #EXPR, __FILE__, __func__,    \
                                              __LINE__);                            \
     if (_status != CUDA_SUCCESS) {                                                 \
       return _status;                                                              \
@@ -247,10 +257,10 @@ inline bool MatchesTag(const std::string& filter, const std::string& candidate) 
 #define RETURN_IF_CU_ERROR_AS_CUDA(EXPR)                                            \
   do {                                                                               \
     const CUresult _status =                                                       \
-        ::memsaver::internal::utils::CheckCu((EXPR), #EXPR, __FILE__, __func__,    \
+        CheckCu((EXPR), #EXPR, __FILE__, __func__,    \
                                              __LINE__);                            \
     if (_status != CUDA_SUCCESS) {                                                 \
-      return ::memsaver::internal::utils::ConvertCuResult(_status);                \
+      return ConvertCuResult(_status);                \
     }                                                                              \
   } while (false)
 

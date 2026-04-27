@@ -8,7 +8,7 @@
 
 #include "internal/utils.h"
 
-namespace memsaver::internal::vmm {
+namespace vmm {
 
 constexpr size_t kGlobalGranularityBytes = 2ULL * 1024ULL * 1024ULL;
 
@@ -51,6 +51,6 @@ inline CUresult GetVmmMinimumGranularity(
   return CUDA_SUCCESS;
 }
 
-}  // namespace memsaver::internal::vmm
+}  // namespace vmm
 
 #endif  // INTERNAL_VMM_H_

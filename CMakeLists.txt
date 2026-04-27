@@ -23,7 +23,6 @@ find_package(CUDAToolkit REQUIRED)
 
 set(MEMSAVER_CORE_SOURCES
   src/internal/context_impl.cpp
-  src/internal/original_cuda_api.cpp
   src/entrypoint.cpp
 )
 

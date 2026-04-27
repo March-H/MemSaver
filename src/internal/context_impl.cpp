@@ -4,16 +4,11 @@
 #include <limits>
 #include <utility>
 
-#include "internal/original_cuda_api.h"
 #include "internal/utils.h"
 #include "internal/vmm.h"
 
-namespace memsaver::internal {
-
-// Construct core context. Behavior of unknown-pointer free is configured by
-// use_original_cuda_symbols_.
-ContextImpl::ContextImpl(const bool use_original_cuda_symbols)
-    : use_original_cuda_symbols_(use_original_cuda_symbols) {}
+// Construct core context.
+ContextImpl::ContextImpl() = default;
 
 // Tear down all tracked allocation resources and virtual arenas.
 ContextImpl::~ContextImpl() {
@@ -23,6 +18,19 @@ ContextImpl::~ContextImpl() {
     ReleaseAllocationForShutdown(kv.first, kv.second);
   }
   allocations_.clear();
+
+  for (const auto& kv : shared_minimum_granularity_handles_) {
+    if (kv.second != 0) {
+      (void)CheckCu(cuMemRelease(kv.second), "cuMemRelease", __FILE__,
+                    __func__, __LINE__);
+    }
+  }
+  shared_minimum_granularity_handles_.clear();
+}
+
+ContextImpl& ContextImpl::instance() {
+  static ContextImpl instance;
+  return instance;
 }
 
 // Destructor-only cleanup path for one allocation record.
@@ -33,20 +41,29 @@ void ContextImpl::ReleaseAllocationForShutdown(
     void* ptr,
     const AllocationMetadata& metadata) {
   if (metadata.state == AllocationState::ACTIVE) {
-    (void)utils::CheckCu(cuMemUnmap(reinterpret_cast<CUdeviceptr>(ptr), metadata.size),
-                        "cuMemUnmap", __FILE__, __func__, __LINE__);
-    if (metadata.alloc_handle != 0) {
-      (void)utils::CheckCu(cuMemRelease(metadata.alloc_handle), "cuMemRelease",
-                          __FILE__, __func__, __LINE__);
+    (void)CheckCu(cuMemUnmap(reinterpret_cast<CUdeviceptr>(ptr), metadata.size),
+                  "cuMemUnmap", __FILE__, __func__, __LINE__);
+    if (metadata.kind == AllocationKind::REGULAR && metadata.alloc_handle != 0) {
+      (void)CheckCu(cuMemRelease(metadata.alloc_handle), "cuMemRelease",
+                    __FILE__, __func__, __LINE__);
     }
   }
 
-  (void)utils::CheckCu(cuMemAddressFree(reinterpret_cast<CUdeviceptr>(ptr), metadata.size),
-                      "cuMemAddressFree", __FILE__, __func__, __LINE__);
+  if (metadata.kind == AllocationKind::ARENA) {
+    for (const auto& kv : metadata.arena_offset_handles) {
+      if (kv.second != 0) {
+        (void)CheckCu(cuMemRelease(kv.second), "cuMemRelease", __FILE__,
+                      __func__, __LINE__);
+      }
+    }
+  }
+
+  (void)CheckCu(cuMemAddressFree(reinterpret_cast<CUdeviceptr>(ptr), metadata.size),
+                "cuMemAddressFree", __FILE__, __func__, __LINE__);
 
   if (metadata.cpu_backup != nullptr) {
-    (void)utils::CheckCuda(cudaFreeHost(metadata.cpu_backup), "cudaFreeHost",
-                          __FILE__, __func__, __LINE__);
+    (void)CheckCuda(cudaFreeHost(metadata.cpu_backup), "cudaFreeHost",
+                    __FILE__, __func__, __LINE__);
   }
 }
 
@@ -57,18 +74,12 @@ cudaError_t ContextImpl::Malloc(
     const CUdevice device,
     const size_t size,
     const RuntimeConfig& config) {
-  if (!config.interesting_region) {
-    RETURN_IF_CUDA_ERROR(
-        OriginalCudaApi::Malloc(ptr, size, use_original_cuda_symbols_));
+  if (config.allocation_mode == AllocationKind::REGULAR) {
+    RETURN_IF_CU_ERROR_AS_CUDA(
+        MallocRegular(ptr, device, size, config.tag, config.enable_cpu_backup));
     return cudaSuccess;
   }
-
-  if (config.allocation_mode == MEMSAVER_ALLOCATION_MODE_ARENA) {
-    RETURN_IF_CU_ERROR_AS_CUDA(MallocArena(ptr, device, size, config.tag));
-    return cudaSuccess;
-  }
-  RETURN_IF_CU_ERROR_AS_CUDA(
-      MallocRegular(ptr, device, size, config.tag, config.enable_cpu_backup));
+  RETURN_IF_CU_ERROR_AS_CUDA(MallocArena(ptr, device, size, config.tag));
   return cudaSuccess;
 }
 
@@ -111,7 +122,6 @@ CUresult ContextImpl::MallocRegular(
 // Free pointer managed by this context.
 //
 // Behavior:
-// - unknown pointer: forward to real cudaFree path
 // - managed pointer: unmap/release/free VMM resources and optional CPU backup
 cudaError_t ContextImpl::Free(void* ptr) {
 
@@ -120,7 +130,7 @@ cudaError_t ContextImpl::Free(void* ptr) {
     const std::lock_guard<std::mutex> lock(mutex_);
     auto metadata_it = allocations_.find(ptr);
     if (metadata_it == allocations_.end()) {
-      RETURN_IF_CUDA_ERROR(OriginalCudaApi::Free(ptr, use_original_cuda_symbols_));
+      LOGE("Free: pointer not found in allocations, it should not happen.");
       return cudaSuccess;
     }
 
@@ -166,7 +176,7 @@ cudaError_t ContextImpl::Pause(const std::string& tag_filter) {
       continue;
     }
 
-    if (!utils::MatchesTag(tag_filter, metadata.tag)) {
+    if (!MatchesTag(tag_filter, metadata.tag)) {
       continue;
     }
 
@@ -214,7 +224,7 @@ cudaError_t ContextImpl::Resume(const std::string& tag_filter) {
       continue;
     }
 
-    if (!utils::MatchesTag(tag_filter, metadata.tag)) {
+    if (!MatchesTag(tag_filter, metadata.tag)) {
       continue;
     }
 
@@ -532,5 +542,3 @@ cudaError_t ContextImpl::DeactivateArenaOffsets(
 
   return cudaSuccess;
 }
-
-}  // namespace memsaver::internal
