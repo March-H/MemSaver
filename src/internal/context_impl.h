@@ -40,7 +40,6 @@ struct RuntimeConfig {
   AllocationKind allocation_mode = AllocationKind::REGULAR;
 };
 
-/** Internal core implementation shared by C API and preload API. */
 class ContextImpl {
  public:
   explicit ContextImpl();

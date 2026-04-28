@@ -6,8 +6,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-${ROOT_DIR}/build}"
 
 "${ROOT_DIR}/build.sh" \
-  --target memsaver_core_shared \
-  --target memsaver_core_static \
+  --target memsaver \
   --build-dir "${BUILD_DIR}"
 
-echo "[test] preload-related C++ tests removed; core libraries built successfully"
+echo "[test] memsaver target built successfully"

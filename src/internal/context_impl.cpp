@@ -8,7 +8,6 @@
 #include "internal/utils.h"
 #include "internal/vmm.h"
 
-// Construct core context.
 ContextImpl::ContextImpl() = default;
 
 // Tear down all tracked allocation resources and virtual arenas.

@@ -8,7 +8,7 @@ Usage:
 
 Examples:
   ./build.sh
-  ./build.sh --target memsaver_core_shared --target memsaver_core_static
+  ./build.sh --target memsaver
   ./build.sh --target memsaver_torch_basic_test
   ./build.sh --target memsaver_torch_arena_test
 EOF

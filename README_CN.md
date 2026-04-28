@@ -2,7 +2,7 @@
 
 MemSaver 是一个 C++/CUDA 库，集成在 PyTorch CUDA caching allocator 的 MemPool 和 segment 层。它可以把一个带 tag 的 region 内的分配路由到独立 pool，在保持虚拟地址稳定的前提下 pause 和 resume 已接管的 GPU 显存，并支持 regular 与 arena 两种分配模式。
 
-仓库对外暴露的公开头文件是 [`include/memsaver/entrypoint.h`](./include/memsaver/entrypoint.h)，构建产物为核心库。
+仓库对外暴露的公开头文件是 [`include/memsaver/entrypoint.h`](./include/memsaver/entrypoint.h)，对应的库 target 是 `memsaver`。
 
 ## 当前能力
 
@@ -21,7 +21,7 @@ MemSaver 是一个 C++/CUDA 库，集成在 PyTorch CUDA caching allocator 的 M
 - C++17
 - 能被 CMake 找到的 PyTorch 或 LibTorch
 
-`CMakeLists.txt` 会先尝试 `find_package(Torch)`，如果失败，再通过 `python -c "import torch; print(torch.utils.cmake_prefix_path)"` 查找 Torch 的 CMake 包。按当前源码结构，构建 `memsaver_core` 时也需要 Torch 头文件和库可用。
+`CMakeLists.txt` 会先尝试 `find_package(Torch)`，如果失败，再通过 `python -c "import torch; print(torch.utils.cmake_prefix_path)"` 查找 Torch 的 CMake 包。按当前源码结构，构建 `memsaver` 时也需要 Torch 头文件和库可用。
 
 ## 构建
 
@@ -40,8 +40,7 @@ cmake --build build -j
 
 构建产物：
 
-- `libmemsaver_core.so`
-- `libmemsaver_core.a`
+- `memsaver`
 
 检测到 Torch 后还会构建测试程序：
 
@@ -51,7 +50,7 @@ cmake --build build -j
 也可以只构建指定 target：
 
 ```bash
-./build.sh --target memsaver_core_shared --target memsaver_core_static
+./build.sh --target memsaver
 ./build.sh --target memsaver_torch_basic_test
 ./build.sh --target memsaver_torch_arena_test
 ```
@@ -66,10 +65,8 @@ cmake --install build --prefix /your/install/prefix
 
 ```cmake
 find_package(MemSaver CONFIG REQUIRED)
-target_link_libraries(your_target PRIVATE MemSaver::memsaver_core_shared)
+target_link_libraries(your_target PRIVATE MemSaver::memsaver)
 ```
-
-安装时会同时导出 `MemSaver::memsaver_core_shared` 和 `MemSaver::memsaver_core_static`。
 
 ## 公开 API
 
@@ -142,11 +139,11 @@ memsaver.evict_region_pool_from_cache("weights", true, AllocationKind::REGULAR);
 
 - 用于 arena 风格的虚拟地址范围
 - 提供 `memsaver_activate_arena_offsets(...)` 和 `memsaver_deactivate_arena_offsets(...)`
-- 当前测试覆盖了在大张量中按 offset 激活子区间，以及取消激活后回退到共享 backing 的行为
+- 当前测试覆盖了在大张量中按 offset 激活子区间，以及取消激活后回退到共同底层映射的行为
 
 ## 测试
 
-只构建核心库的辅助脚本：
+只构建 `memsaver` target 的辅助脚本：
 
 ```bash
 ./tests/run_all_cpp_tests.sh
@@ -173,7 +170,7 @@ ctest --test-dir build --output-on-failure
 - 受管 region 与 Torch 默认 pool 混合出现时的 matmul 场景
 - 同线程与子线程下的 region 行为
 - 重入同一 region 后的地址复用
-- arena 共享 backing
+- arena 共同底层映射
 - arena offset 激活
 - arena offset 取消激活
 

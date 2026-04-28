@@ -2,7 +2,7 @@
 
 MemSaver is a C++/CUDA library that integrates with PyTorch's CUDA caching allocator at the MemPool and segment layer. It lets you route allocations in a tagged region into a dedicated pool, pause and resume managed GPU memory while keeping virtual addresses stable, and switch between regular and arena-style allocation behavior.
 
-This repository exposes the public header [`include/memsaver/entrypoint.h`](./include/memsaver/entrypoint.h) and builds the core library.
+This repository exposes the public header [`include/memsaver/entrypoint.h`](./include/memsaver/entrypoint.h) and the `memsaver` library target.
 
 ## Current Scope
 
@@ -21,7 +21,7 @@ This repository exposes the public header [`include/memsaver/entrypoint.h`](./in
 - C++17
 - PyTorch or LibTorch available to CMake
 
-`CMakeLists.txt` first tries `find_package(Torch)` and then falls back to `python -c "import torch; print(torch.utils.cmake_prefix_path)"` to locate the Torch CMake package. In practice, the current source tree expects Torch headers and libraries to be available even when you only build `memsaver_core`.
+`CMakeLists.txt` first tries `find_package(Torch)` and then falls back to `python -c "import torch; print(torch.utils.cmake_prefix_path)"` to locate the Torch CMake package. In practice, the current source tree expects Torch headers and libraries to be available when building `memsaver`.
 
 ## Build
 
@@ -38,10 +38,9 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-Build outputs:
+Build output:
 
-- `libmemsaver_core.so`
-- `libmemsaver_core.a`
+- `memsaver`
 
 Optional test binaries are built when Torch is found:
 
@@ -51,7 +50,7 @@ Optional test binaries are built when Torch is found:
 You can also build specific targets:
 
 ```bash
-./build.sh --target memsaver_core_shared --target memsaver_core_static
+./build.sh --target memsaver
 ./build.sh --target memsaver_torch_basic_test
 ./build.sh --target memsaver_torch_arena_test
 ```
@@ -66,10 +65,8 @@ From another CMake project:
 
 ```cmake
 find_package(MemSaver CONFIG REQUIRED)
-target_link_libraries(your_target PRIVATE MemSaver::memsaver_core_shared)
+target_link_libraries(your_target PRIVATE MemSaver::memsaver)
 ```
-
-The install exports both `MemSaver::memsaver_core_shared` and `MemSaver::memsaver_core_static`.
 
 ## Public API
 
@@ -142,7 +139,7 @@ memsaver.evict_region_pool_from_cache("weights", true, AllocationKind::REGULAR);
 
 - Designed for arena-style virtual ranges
 - Exposes `memsaver_activate_arena_offsets(...)` and `memsaver_deactivate_arena_offsets(...)`
-- Current tests exercise sparse activation of subranges inside a larger Torch tensor and verify that deactivated ranges fall back to the shared backing behavior
+- Current tests exercise sparse activation of subranges inside a larger Torch tensor and verify that deactivated ranges fall back to the common backing behavior
 
 ## Tests
 
@@ -173,7 +170,7 @@ Current coverage includes:
 - Matmul scenarios that mix managed regions with Torch's default pool
 - Same-thread and child-thread region behavior
 - Region reentry and address reuse
-- Arena shared backing
+- Arena common backing
 - Arena offset activation
 - Arena offset deactivation
 
