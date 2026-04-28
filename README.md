@@ -1,101 +1,193 @@
 # MemSaver
 
-MemSaver is a pure C++/CUDA third-party library for temporarily releasing GPU memory while preserving virtual addresses.
+MemSaver is a C++/CUDA library that integrates with PyTorch's CUDA caching allocator at the MemPool and segment layer. It lets you route allocations in a tagged region into a dedicated pool, pause and resume managed GPU memory while keeping virtual addresses stable, and switch between regular and arena-style allocation behavior.
 
-It provides:
-- A stable C ABI (`include/memsaver/memsaver_c.h`)
-- A lightweight C++ RAII wrapper (`include/memsaver/memsaver.hpp`)
-- An `LD_PRELOAD` hook library (`libmemsaver_preload.so`) that intercepts `cudaMalloc/cudaFree`
+This repository exposes the public header [`include/memsaver/entrypoint.h`](./include/memsaver/entrypoint.h) and builds the core library.
 
-Supported platform (v1):
+## Current Scope
+
+- Region-scoped allocation control through `MemSaver`
+- Tagged pool reuse keyed by `(tag, enable_cpu_backup, allocation_mode)`
+- Pause and resume for managed allocations
+- Optional CPU backup for regular allocations
+- Arena mode with explicit offset activation and deactivation
+- Torch-based runtime tests for both regular and arena behavior
+
+## Requirements
+
 - Linux x86_64
-- CUDA 12.x
+- CUDA toolkit
+- CMake 3.20 or newer
+- C++17
+- PyTorch or LibTorch available to CMake
+
+`CMakeLists.txt` first tries `find_package(Torch)` and then falls back to `python -c "import torch; print(torch.utils.cmake_prefix_path)"` to locate the Torch CMake package. In practice, the current source tree expects Torch headers and libraries to be available even when you only build `memsaver_core`.
 
 ## Build
+
+Recommended:
+
+```bash
+./build.sh
+```
+
+Equivalent CMake flow:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-Artifacts:
+Build outputs:
+
 - `libmemsaver_core.so`
 - `libmemsaver_core.a`
-- `libmemsaver_preload.so`
+
+Optional test binaries are built when Torch is found:
+
+- `memsaver_torch_basic_test`
+- `memsaver_torch_arena_test`
+
+You can also build specific targets:
+
+```bash
+./build.sh --target memsaver_core_shared --target memsaver_core_static
+./build.sh --target memsaver_torch_basic_test
+./build.sh --target memsaver_torch_arena_test
+```
 
 ## Install And Consume
-
-Install:
 
 ```bash
 cmake --install build --prefix /your/install/prefix
 ```
 
-Use from CMake project:
+From another CMake project:
 
 ```cmake
 find_package(MemSaver CONFIG REQUIRED)
 target_link_libraries(your_target PRIVATE MemSaver::memsaver_core_shared)
 ```
 
-## C API Example
+The install exports both `MemSaver::memsaver_core_shared` and `MemSaver::memsaver_core_static`.
 
-```c
-#include <memsaver/memsaver_c.h>
+## Public API
 
-memsaver_ctx_t* ctx = NULL;
-memsaver_ctx_create(&ctx);
+The main entrypoint is the `MemSaver` class:
 
-memsaver_set_interesting_region(ctx, true);
-memsaver_set_current_tag(ctx, "weights");
-memsaver_set_enable_cpu_backup(ctx, true);
-
-void* ptr = NULL;
-memsaver_malloc(ctx, &ptr, 1 << 20);
-
-memsaver_pause(ctx, "weights");
-memsaver_resume(ctx, "weights");
-
-memsaver_free(ctx, ptr);
-memsaver_ctx_destroy(ctx);
+```cpp
+class MemSaver {
+ public:
+  cudaError_t enter_region(
+      const std::string& tag,
+      bool enable_cpu_backup,
+      AllocationKind mode = AllocationKind::REGULAR);
+  cudaError_t leave_region();
+  cudaError_t evict_region_pool_from_cache(
+      const std::string& tag,
+      bool enable_cpu_backup,
+      AllocationKind mode = AllocationKind::REGULAR);
+};
 ```
 
-## Preload Mode
+Additional exported functions in [`include/memsaver/entrypoint.h`](./include/memsaver/entrypoint.h):
 
-`libmemsaver_preload.so` hooks `cudaMalloc/cudaFree`:
+- `memsaver_malloc` and `memsaver_free`
+- `memsaver_torch_malloc` and `memsaver_torch_free`
+- `memsaver_pause` and `memsaver_resume`
+- `memsaver_empty_cache`
+- `memsaver_activate_arena_offsets`
+- `memsaver_deactivate_arena_offsets`
+- `memsaver_get_metadata_count_by_tag`
+- `memsaver_get_cpu_backup_pointer`
 
-```bash
-LD_PRELOAD=/path/to/libmemsaver_preload.so ./your_cuda_program
+## Minimal Usage
+
+```cpp
+#include <memsaver/entrypoint.h>
+#include <torch/torch.h>
+
+MemSaver memsaver;
+auto options = torch::TensorOptions().dtype(torch::kUInt8).device(torch::kCUDA);
+
+memsaver.enter_region("weights", true, AllocationKind::REGULAR);
+torch::Tensor tensor = torch::empty({20 * 1024 * 1024}, options);
+memsaver.leave_region();
+
+memsaver_pause("weights");
+memsaver_resume("weights");
+
+tensor = torch::Tensor();
+memsaver.evict_region_pool_from_cache("weights", true, AllocationKind::REGULAR);
 ```
 
-Thread-local default interesting-region state can be configured via:
-- `MEMSAVER_ENABLE` (`0/1`, `true/false`)
+## Region Semantics
 
-Notes:
-- `CPU backup` and `allocation mode` are configured only by preload control APIs.
-- Preload config is `thread_local`; child threads do not inherit parent-thread
-  runtime overrides automatically.
+- Regions are thread-local.
+- Nested regions on the same thread are rejected.
+- Child threads do not inherit an active region; they must call `enter_region` themselves.
+- `leave_region()` stops routing allocations into the region pool and releases the pool back to Torch's allocator, but the cached pool entry remains reusable until `evict_region_pool_from_cache(...)` removes it.
+- `memsaver_pause(nullptr)` and `memsaver_resume(nullptr)` operate on all managed tags.
+- `enable_cpu_backup` is normalized off for `AllocationKind::ARENA`; CPU backup only applies to `AllocationKind::REGULAR`.
 
-The preload library also exports control symbols (for integration/tests):
-- `memsaver_preload_set_interesting_region`
-- `memsaver_preload_set_current_tag`
-- `memsaver_preload_set_enable_cpu_backup`
-- `memsaver_preload_set_allocation_mode`
-- `memsaver_preload_region_begin`
-- `memsaver_preload_region_end`
-- `memsaver_preload_pause`
-- `memsaver_preload_resume`
+## Allocation Modes
 
-`memsaver_preload_region_begin/end` provide a torch-style region:
-- inside region: allocations are routed to a tag-split private pool and managed by MemSaver
-- outside region: allocation follows current preload switch/config (e.g. default torch pool when disabled)
+`AllocationKind::REGULAR`
+
+- Designed for regular managed allocations
+- Supports CPU backup
+- Covered by pause and resume tests with and without preserved tensor contents
+
+`AllocationKind::ARENA`
+
+- Designed for arena-style virtual ranges
+- Exposes `memsaver_activate_arena_offsets(...)` and `memsaver_deactivate_arena_offsets(...)`
+- Current tests exercise sparse activation of subranges inside a larger Torch tensor and verify that deactivated ranges fall back to the shared backing behavior
 
 ## Tests
+
+Build-only helper:
+
+```bash
+./tests/run_all_cpp_tests.sh
+```
+
+Torch runtime tests:
+
+```bash
+./tests/run_torch_basic_test.sh
+./tests/run_torch_arena_test.sh
+```
+
+If the test binaries were added to CTest, you can also run:
 
 ```bash
 ctest --test-dir build --output-on-failure
 ```
 
-Included tests:
-- preload smoke test (via `LD_PRELOAD`)
-- torch basic test (built only when Torch C++ package is found)
+Current coverage includes:
+
+- Regular allocations with tag-based metadata tracking
+- Pause and resume with CPU backup enabled
+- Pause and resume without CPU backup
+- Matmul scenarios that mix managed regions with Torch's default pool
+- Same-thread and child-thread region behavior
+- Region reentry and address reuse
+- Arena shared backing
+- Arena offset activation
+- Arena offset deactivation
+
+## Repository Layout
+
+```text
+.
+├── include/memsaver/entrypoint.h
+├── src/entrypoint.cpp
+├── src/internal/
+├── tests/basic_test.cpp
+├── tests/arena_test.cpp
+├── tests/test_utils.h
+├── tests/run_torch_basic_test.sh
+├── tests/run_torch_arena_test.sh
+└── build.sh
+```
