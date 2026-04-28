@@ -19,11 +19,20 @@
 constexpr uint64_t kMiB = 1024ULL * 1024ULL;
 constexpr uint64_t kAligned2MiB = 2ULL * kMiB;
 
+inline const char*& CurrentTestName() {
+  static const char* test_name = "basic_test";
+  return test_name;
+}
+
+inline void SetTestName(const char* test_name) {
+  CurrentTestName() = test_name;
+}
+
 inline void CheckCuda(const cudaError_t status, const char* expr) {
   if (status == cudaSuccess) {
     return;
   }
-  std::cerr << "[basic_test] " << expr << " failed: "
+  std::cerr << "[" << CurrentTestName() << "] " << expr << " failed: "
             << cudaGetErrorString(status) << " (" << static_cast<int>(status)
             << ")" << std::endl;
   std::exit(1);
@@ -33,7 +42,8 @@ inline void CheckTrue(const bool value, const char* message) {
   if (value) {
     return;
   }
-  std::cerr << "[basic_test] assertion failed: " << message << std::endl;
+  std::cerr << "[" << CurrentTestName() << "] assertion failed: "
+            << message << std::endl;
   std::exit(1);
 }
 
@@ -41,7 +51,8 @@ inline bool MaybeSkipNoGpu() {
   int device_count = 0;
   const cudaError_t status = cudaGetDeviceCount(&device_count);
   if (status != cudaSuccess || device_count <= 0) {
-    std::cout << "[basic_test] skipped (no CUDA device available)" << std::endl;
+    std::cout << "[" << CurrentTestName()
+              << "] skipped (no CUDA device available)" << std::endl;
     return true;
   }
   return false;
@@ -100,12 +111,14 @@ inline void ExpectDeltaExact(
     const uint64_t expected_delta,
     const char* label) {
   const uint64_t observed_delta = CurrentDeltaBytes(baseline);
-  std::cout << "[basic_test] " << label << " observed delta == "
+  std::cout << "[" << CurrentTestName() << "] " << label
+            << " observed delta == "
             << observed_delta / 1024.0 / 1024.0 << " MB" << std::endl;
   if (observed_delta == expected_delta) {
     return;
   }
-  std::cerr << "[basic_test] " << label << " expected delta == "
+  std::cerr << "[" << CurrentTestName() << "] " << label
+            << " expected delta == "
             << expected_delta << " but observed " << observed_delta
             << std::endl;
   std::exit(1);
@@ -118,12 +131,14 @@ inline void ExpectReleasedExact(
     const char* label) {
   const uint64_t released =
       before_delta > after_delta ? before_delta - after_delta : 0ULL;
-  std::cout << "[basic_test] " << label << " observed released == "
+  std::cout << "[" << CurrentTestName() << "] " << label
+            << " observed released == "
             << released / 1024.0 / 1024.0 << " MB" << std::endl;
   if (released == expected_release) {
     return;
   }
-  std::cerr << "[basic_test] " << label << " expected released == "
+  std::cerr << "[" << CurrentTestName() << "] " << label
+            << " expected released == "
             << expected_release << " but observed " << released << std::endl;
   std::exit(1);
 }
@@ -157,12 +172,14 @@ inline void ExpectMetadataCountByTag(
   CheckCuda(
       memsaver_get_metadata_count_by_tag(tag, &observed_count),
       "get_metadata_count_by_tag");
-  std::cout << "[basic_test] " << label << " observed count == "
+  std::cout << "[" << CurrentTestName() << "] " << label
+            << " observed count == "
             << observed_count << std::endl;
   if (observed_count == expected_count) {
     return;
   }
-  std::cerr << "[basic_test] " << label << " expected count == "
+  std::cerr << "[" << CurrentTestName() << "] " << label
+            << " expected count == "
             << expected_count << " but observed " << observed_count
             << std::endl;
   std::exit(1);

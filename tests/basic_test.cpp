@@ -365,7 +365,8 @@ void TestCase6GemmChildThread(MemSaver& memsaver) {
     worker.join();
 
     if (output.setup_status != cudaSuccess) {
-      std::cerr << "[basic_test] case6 subcaseB worker setup failed at "
+      std::cerr << "[" << CurrentTestName()
+                << "] case6 subcaseB worker setup failed at "
                 << output.setup_error << ": "
                 << cudaGetErrorString(output.setup_status) << std::endl;
       std::exit(1);
@@ -467,6 +468,7 @@ void TestCase7RegionReentryReusesAddress(MemSaver& memsaver) {
 }
 
 int main() {
+  SetTestName("basic_test");
   if (MaybeSkipNoGpu()) {
     return 0;
   }
@@ -482,6 +484,6 @@ int main() {
   TestCase6GemmChildThread(memsaver);
   TestCase7RegionReentryReusesAddress(memsaver);
 
-  std::cout << "[basic_test] all tests passed" << std::endl;
+  std::cout << "[" << CurrentTestName() << "] all tests passed" << std::endl;
   return 0;
 }

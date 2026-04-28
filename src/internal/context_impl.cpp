@@ -80,6 +80,8 @@ cudaError_t ContextImpl::Malloc(
         MallocRegular(ptr, device, size, config.tag, config.enable_cpu_backup));
     return cudaSuccess;
   }
+  RETURN_IF_FALSE(!config.enable_cpu_backup, cudaErrorInvalidValue,
+                  "Malloc: ARENA allocation does not support cpu_backup now.");
   RETURN_IF_CU_ERROR_AS_CUDA(MallocArena(ptr, device, size, config.tag));
   return cudaSuccess;
 }
@@ -143,11 +145,20 @@ cudaError_t ContextImpl::Free(void* ptr) {
   // only ACTIVE allocations should run the unmap/release path here.
   if (metadata.state == AllocationState::ACTIVE) {
     RETURN_IF_CUDA_ERROR(cudaDeviceSynchronize());
-    RETURN_IF_CU_ERROR_AS_CUDA(
-        cuMemUnmap(reinterpret_cast<CUdeviceptr>(ptr), metadata.size));
-    RETURN_IF_FALSE(metadata.alloc_handle != 0, cudaErrorInvalidValue,
-                             "Free: active allocation handle should not be 0");
-    RETURN_IF_CU_ERROR_AS_CUDA(cuMemRelease(metadata.alloc_handle));
+    if (metadata.kind == AllocationKind::REGULAR) {
+      RETURN_IF_CU_ERROR_AS_CUDA(
+          cuMemUnmap(reinterpret_cast<CUdeviceptr>(ptr), metadata.size));
+      RETURN_IF_FALSE(metadata.alloc_handle != 0, cudaErrorInvalidValue,
+                               "Free: active allocation handle should not be 0");
+      RETURN_IF_CU_ERROR_AS_CUDA(cuMemRelease(metadata.alloc_handle));
+    } else {
+      // 释放arena
+      RETURN_IF_CU_ERROR_AS_CUDA(
+          cuMemUnmap(reinterpret_cast<CUdeviceptr>(ptr), metadata.size));
+      for (const auto& kv : metadata.arena_offset_handles) {
+        RETURN_IF_CU_ERROR_AS_CUDA(cuMemRelease(kv.second));
+      }
+    }
   }
 
   RETURN_IF_CU_ERROR_AS_CUDA(
@@ -455,6 +466,7 @@ CUresult ContextImpl::MallocArena(
       GetOrCreateSharedMinimumGranularityHandle(device, &shared_handle));
   RETURN_IF_CU_ERROR(MapRangeToEmptyHandle(
       reserved_address, size, shared_handle, minimum_granularity_bytes));
+  RETURN_IF_CU_ERROR(vmm::SetAccess(reserved_address, size, device));
 
   *ptr = reinterpret_cast<void*>(reserved_address);
   {
@@ -587,6 +599,7 @@ cudaError_t ContextImpl::DeactivateArenaOffsets(
         size,
         arena_metadata->empty_handle,
         minimum_granularity_bytes));
+    RETURN_IF_CU_ERROR_AS_CUDA(vmm::SetAccess(address, size, device));
 
     arena_metadata->arena_offset_handles.erase(offset);
   }

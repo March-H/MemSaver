@@ -190,5 +190,31 @@ if(MEMSAVER_BUILD_TESTS)
         BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib;${MEMSAVER_TORCH_CUDA_LIBRARY_DIRS}")
     endif()
     add_test(NAME memsaver_torch_basic_test COMMAND memsaver_torch_basic_test)
+
+    add_executable(memsaver_torch_arena_test tests/arena_test.cpp)
+    target_compile_features(memsaver_torch_arena_test PUBLIC cxx_std_17)
+    target_compile_definitions(memsaver_torch_arena_test
+      PRIVATE MEMSAVER_FATAL_ON_ERROR=${MEMSAVER_FATAL_ON_ERROR_VALUE})
+    target_compile_options(memsaver_torch_arena_test PRIVATE ${MEMSAVER_TORCH_CXX_FLAGS})
+    target_include_directories(memsaver_torch_arena_test
+      PRIVATE
+        ${TORCH_INCLUDE_DIRS}
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CUDAToolkit_INCLUDE_DIRS}
+    )
+    target_link_libraries(memsaver_torch_arena_test
+      PRIVATE
+        memsaver_core_shared
+        ${TORCH_LIBRARIES}
+        ${MEMSAVER_TORCH_EXTRA_LINK_LIBRARIES}
+        CUDA::cuda_driver
+        ${MEMSAVER_CUDART_LINK_LIBRARY}
+        ${MEMSAVER_CUPTI_LINK_LIBRARY}
+    )
+    if(DEFINED TORCH_INSTALL_PREFIX)
+      set_target_properties(memsaver_torch_arena_test PROPERTIES
+        BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib;${MEMSAVER_TORCH_CUDA_LIBRARY_DIRS}")
+    endif()
+    add_test(NAME memsaver_torch_arena_test COMMAND memsaver_torch_arena_test)
   endif()
 endif()
