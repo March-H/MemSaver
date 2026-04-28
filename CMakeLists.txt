@@ -20,6 +20,69 @@ if(NOT MEMSAVER_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
 endif()
 
 find_package(CUDAToolkit REQUIRED)
+find_package(Torch QUIET)
+
+if(NOT Torch_FOUND)
+  execute_process(
+    COMMAND python -c "import torch; print(torch.utils.cmake_prefix_path)"
+    OUTPUT_VARIABLE MEMSAVER_TORCH_CMAKE_PREFIX
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  if(MEMSAVER_TORCH_CMAKE_PREFIX)
+    list(PREPEND CMAKE_PREFIX_PATH "${MEMSAVER_TORCH_CMAKE_PREFIX}")
+    find_package(Torch QUIET)
+  endif()
+endif()
+
+if(Torch_FOUND)
+  separate_arguments(MEMSAVER_TORCH_CXX_FLAGS NATIVE_COMMAND "${TORCH_CXX_FLAGS}")
+  execute_process(
+    COMMAND python -c "import importlib, os; dirs=[]; modules=('nvidia.cuda_runtime','nvidia.cuda_cupti','nvidia.cuda_nvrtc'); [dirs.append(os.path.join(os.path.dirname(importlib.import_module(module).__file__), 'lib')) for module in modules if importlib.util.find_spec(module)]; print(';'.join(dirs))"
+    OUTPUT_VARIABLE MEMSAVER_TORCH_CUDA_LIBRARY_DIRS
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  if(MEMSAVER_TORCH_CUDA_LIBRARY_DIRS)
+    find_library(
+      MEMSAVER_TORCH_CUDART_LIBRARY
+      NAMES libcudart.so.12 cudart
+      HINTS ${MEMSAVER_TORCH_CUDA_LIBRARY_DIRS}
+      NO_DEFAULT_PATH
+    )
+    find_library(
+      MEMSAVER_TORCH_CUPTI_LIBRARY
+      NAMES libcupti.so.12 cupti
+      HINTS ${MEMSAVER_TORCH_CUDA_LIBRARY_DIRS}
+      NO_DEFAULT_PATH
+    )
+    find_library(
+      MEMSAVER_TORCH_NVRTC_LIBRARY
+      NAMES libnvrtc.so.12 nvrtc
+      HINTS ${MEMSAVER_TORCH_CUDA_LIBRARY_DIRS}
+      NO_DEFAULT_PATH
+    )
+  endif()
+endif()
+
+set(MEMSAVER_CUDART_LINK_LIBRARY CUDA::cudart)
+if(MEMSAVER_TORCH_CUDART_LIBRARY)
+  set(MEMSAVER_CUDART_LINK_LIBRARY ${MEMSAVER_TORCH_CUDART_LIBRARY})
+endif()
+
+set(MEMSAVER_CUPTI_LINK_LIBRARY CUDA::cupti)
+if(MEMSAVER_TORCH_CUPTI_LIBRARY)
+  set(MEMSAVER_CUPTI_LINK_LIBRARY ${MEMSAVER_TORCH_CUPTI_LIBRARY})
+endif()
+
+set(MEMSAVER_TORCH_EXTRA_LINK_LIBRARIES)
+if(MEMSAVER_TORCH_NVRTC_LIBRARY)
+  list(APPEND MEMSAVER_TORCH_EXTRA_LINK_LIBRARIES ${MEMSAVER_TORCH_NVRTC_LIBRARY})
+endif()
+if(MEMSAVER_TORCH_CUDART_LIBRARY)
+  list(APPEND MEMSAVER_TORCH_EXTRA_LINK_LIBRARIES ${MEMSAVER_TORCH_CUDART_LIBRARY})
+endif()
+if(MEMSAVER_TORCH_CUPTI_LIBRARY)
+  list(APPEND MEMSAVER_TORCH_EXTRA_LINK_LIBRARIES ${MEMSAVER_TORCH_CUPTI_LIBRARY})
+endif()
 
 set(MEMSAVER_CORE_SOURCES
   src/internal/context_impl.cpp
@@ -44,15 +107,21 @@ foreach(target_name IN ITEMS memsaver_core_shared memsaver_core_static)
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
       $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE
+      ${TORCH_INCLUDE_DIRS}
       ${CMAKE_CURRENT_SOURCE_DIR}/src
       ${CUDAToolkit_INCLUDE_DIRS}
   )
-  target_link_libraries(${target_name} PUBLIC CUDA::cuda_driver CUDA::cudart)
-  target_link_libraries(${target_name} PRIVATE dl)
+  target_compile_options(${target_name} PRIVATE ${MEMSAVER_TORCH_CXX_FLAGS})
+  target_link_libraries(${target_name} PUBLIC CUDA::cuda_driver ${MEMSAVER_CUDART_LINK_LIBRARY})
+  target_link_libraries(${target_name} PRIVATE dl ${TORCH_LIBRARIES} ${MEMSAVER_TORCH_EXTRA_LINK_LIBRARIES})
   set_target_properties(${target_name} PROPERTIES
     OUTPUT_NAME memsaver_core
     POSITION_INDEPENDENT_CODE ON
   )
+  if(Torch_FOUND)
+    set_target_properties(${target_name} PROPERTIES
+      BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib;${MEMSAVER_TORCH_CUDA_LIBRARY_DIRS}")
+  endif()
 endforeach()
 
 install(TARGETS
@@ -94,4 +163,32 @@ install(
 
 if(MEMSAVER_BUILD_TESTS)
   include(CTest)
+
+  if(Torch_FOUND)
+    add_executable(memsaver_torch_basic_test tests/basic_test.cpp)
+    target_compile_features(memsaver_torch_basic_test PUBLIC cxx_std_17)
+    target_compile_definitions(memsaver_torch_basic_test
+      PRIVATE MEMSAVER_FATAL_ON_ERROR=${MEMSAVER_FATAL_ON_ERROR_VALUE})
+    target_compile_options(memsaver_torch_basic_test PRIVATE ${MEMSAVER_TORCH_CXX_FLAGS})
+    target_include_directories(memsaver_torch_basic_test
+      PRIVATE
+        ${TORCH_INCLUDE_DIRS}
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CUDAToolkit_INCLUDE_DIRS}
+    )
+    target_link_libraries(memsaver_torch_basic_test
+      PRIVATE
+        memsaver_core_shared
+        ${TORCH_LIBRARIES}
+        ${MEMSAVER_TORCH_EXTRA_LINK_LIBRARIES}
+        CUDA::cuda_driver
+        ${MEMSAVER_CUDART_LINK_LIBRARY}
+        ${MEMSAVER_CUPTI_LINK_LIBRARY}
+    )
+    if(DEFINED TORCH_INSTALL_PREFIX)
+      set_target_properties(memsaver_torch_basic_test PROPERTIES
+        BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib;${MEMSAVER_TORCH_CUDA_LIBRARY_DIRS}")
+    endif()
+    add_test(NAME memsaver_torch_basic_test COMMAND memsaver_torch_basic_test)
+  endif()
 endif()

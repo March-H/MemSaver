@@ -10,16 +10,12 @@
 #include <string>
 #include <unordered_map>
 
+#include "memsaver/entrypoint.h"
+
 /** State of a managed regular allocation. */
 enum class AllocationState {
   ACTIVE,
   PAUSED,
-};
-
-/** Backing source used by an allocation record. */
-enum class AllocationKind {
-  REGULAR,
-  ARENA,
 };
 
 /** Metadata tracked for each managed allocation pointer. */
@@ -85,6 +81,14 @@ class ContextImpl {
   cudaError_t GetMetadataCountByTag(
       const std::string& tag,
       uint64_t* out_count);
+  cudaError_t ReleaseAllocations(
+      const std::string& tag,
+      bool enable_cpu_backup,
+      AllocationKind kind);
+  bool HasAllocations(
+      const std::string& tag,
+      bool enable_cpu_backup,
+      AllocationKind kind);
 
  private:
   CUresult MallocRegular(

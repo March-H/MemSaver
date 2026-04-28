@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-${ROOT_DIR}/build}"
 
 "${ROOT_DIR}/build.sh" \
@@ -10,4 +10,4 @@ BUILD_DIR="${BUILD_DIR:-${ROOT_DIR}/build}"
   --target memsaver_core_static \
   --build-dir "${BUILD_DIR}"
 
-echo "[test] torch preload basic test removed with preload target"
+echo "[test] preload-related C++ tests removed; core libraries built successfully"

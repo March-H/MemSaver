@@ -3,6 +3,7 @@
 #include <cstring>
 #include <limits>
 #include <utility>
+#include <vector>
 
 #include "internal/utils.h"
 #include "internal/vmm.h"
@@ -328,6 +329,56 @@ cudaError_t ContextImpl::GetMetadataCountByTag(
 
   *out_count = count;
   return cudaSuccess;
+}
+
+cudaError_t ContextImpl::ReleaseAllocations(
+    const std::string& tag,
+    const bool enable_cpu_backup,
+    const AllocationKind kind) {
+  std::vector<std::pair<void*, AllocationMetadata>> allocations_to_release;
+  bool needs_synchronize = false;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    for (auto it = allocations_.begin(); it != allocations_.end();) {
+      const AllocationMetadata& metadata = it->second;
+      if (metadata.tag != tag ||
+          metadata.enable_cpu_backup != enable_cpu_backup ||
+          metadata.kind != kind) {
+        ++it;
+        continue;
+      }
+      needs_synchronize = needs_synchronize ||
+                          metadata.state == AllocationState::ACTIVE;
+      allocations_to_release.emplace_back(it->first, std::move(it->second));
+      it = allocations_.erase(it);
+    }
+  }
+
+  if (needs_synchronize) {
+    RETURN_IF_CUDA_ERROR(cudaDeviceSynchronize());
+  }
+
+  for (const auto& allocation : allocations_to_release) {
+    ReleaseAllocationForShutdown(allocation.first, allocation.second);
+  }
+
+  return cudaSuccess;
+}
+
+bool ContextImpl::HasAllocations(
+    const std::string& tag,
+    const bool enable_cpu_backup,
+    const AllocationKind kind) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  for (const auto& kv : allocations_) {
+    const AllocationMetadata& metadata = kv.second;
+    if (metadata.tag == tag &&
+        metadata.enable_cpu_backup == enable_cpu_backup &&
+        metadata.kind == kind) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Lazily create one minimum-granularity shared handle for a device.
