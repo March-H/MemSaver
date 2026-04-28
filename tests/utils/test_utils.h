@@ -99,6 +99,16 @@ inline void WarmUpTorchMatmul() {
   EmptyTorchCache();
 }
 
+inline void WarmUpModelLoaderPath() {
+  auto cpu = torch::ones({1024}, torch::TensorOptions().dtype(torch::kBFloat16));
+  auto gpu = torch::empty(
+      {1024}, torch::TensorOptions().dtype(torch::kBFloat16).device(torch::kCUDA));
+  gpu.copy_(cpu);
+  SyncCuda();
+  gpu = torch::Tensor();
+  EmptyTorchCache();
+}
+
 inline uint64_t CurrentDeltaBytes(const uint64_t baseline) {
   const uint64_t current = DeviceUsedBytes();
   const int64_t observed_delta =
@@ -156,18 +166,23 @@ inline uintptr_t TensorAddress(const torch::Tensor& t) {
 inline void CheckManagedMetadataExistsForTensor(
     const torch::Tensor& tensor,
     const char* label) {
+  const size_t query_bytes = std::min<size_t>(16, tensor.nbytes());
+  CheckTrue(query_bytes != 0, "tensor should have non-zero bytes");
   uint8_t* cpu_backup = reinterpret_cast<uint8_t*>(0x1);
   const auto status = memsaver_get_cpu_backup_pointer(
-      static_cast<const uint8_t*>(tensor.data_ptr()), 16, &cpu_backup);
+      static_cast<const uint8_t*>(tensor.data_ptr()), query_bytes, &cpu_backup);
   CheckCuda(status, label);
   CheckTrue(cpu_backup == nullptr,
             "active managed allocation should expose null cpu backup pointer");
 }
 
-inline void ExpectMetadataCountByTag(
-    const char* tag,
-    const uint64_t expected_count,
-    const char* label) {
+inline void CheckManagedMetadataExistsForTensor(
+    const torch::Tensor& tensor,
+    const std::string& label) {
+  CheckManagedMetadataExistsForTensor(tensor, label.c_str());
+}
+
+inline uint64_t MetadataCountByTag(const char* tag, const char* label) {
   uint64_t observed_count = 0;
   CheckCuda(
       memsaver_get_metadata_count_by_tag(tag, &observed_count),
@@ -175,6 +190,20 @@ inline void ExpectMetadataCountByTag(
   std::cout << "[" << CurrentTestName() << "] " << label
             << " observed count == "
             << observed_count << std::endl;
+  return observed_count;
+}
+
+inline uint64_t MetadataCountByTag(
+    const std::string& tag,
+    const std::string& label) {
+  return MetadataCountByTag(tag.c_str(), label.c_str());
+}
+
+inline void ExpectMetadataCountByTag(
+    const char* tag,
+    const uint64_t expected_count,
+    const char* label) {
+  const uint64_t observed_count = MetadataCountByTag(tag, label);
   if (observed_count == expected_count) {
     return;
   }

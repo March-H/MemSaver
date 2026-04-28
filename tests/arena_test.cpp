@@ -1,4 +1,4 @@
-#include "test_utils.h"
+#include "utils/test_utils.h"
 
 void TestCase1ArenaSharedBacking(MemSaver& memsaver, const uint64_t baseline) {
   CheckCuda(

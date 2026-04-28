@@ -146,14 +146,14 @@ memsaver.evict_region_pool_from_cache("weights", true, AllocationKind::REGULAR);
 Build-only helper:
 
 ```bash
-./tests/run_all_cpp_tests.sh
+./tests/sh/run_all_cpp_tests.sh
 ```
 
 Torch runtime tests:
 
 ```bash
-./tests/run_torch_basic_test.sh
-./tests/run_torch_arena_test.sh
+./tests/sh/run_torch_basic_test.sh
+./tests/sh/run_torch_arena_test.sh
 ```
 
 If the test binaries were added to CTest, you can also run:
@@ -183,8 +183,8 @@ Current coverage includes:
 ├── src/internal/
 ├── tests/basic_test.cpp
 ├── tests/arena_test.cpp
-├── tests/test_utils.h
-├── tests/run_torch_basic_test.sh
-├── tests/run_torch_arena_test.sh
+├── tests/utils/test_utils.h
+├── tests/sh/run_torch_basic_test.sh
+├── tests/sh/run_torch_arena_test.sh
 └── build.sh
 ```

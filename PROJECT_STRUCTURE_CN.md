@@ -13,10 +13,10 @@
 ├── tests/
 │   ├── basic_test.cpp                # regular 分配与 region 行为测试
 │   ├── arena_test.cpp                # arena 分配行为测试
-│   ├── run_all_cpp_tests.sh          # 构建 memsaver target
-│   ├── run_torch_basic_test.sh       # 构建并运行 Torch 基础测试
-│   ├── run_torch_arena_test.sh       # 构建并运行 Torch arena 测试
-│   ├── test_utils.h                  # 共享测试工具
+│   ├── sh/run_all_cpp_tests.sh       # 构建 memsaver target
+│   ├── sh/run_torch_basic_test.sh    # 构建并运行 Torch 基础测试
+│   ├── sh/run_torch_arena_test.sh    # 构建并运行 Torch arena 测试
+│   ├── utils/test_utils.h            # 共享测试工具
 │   └── 测试项目.md                   # 测试用例说明
 ├── build.sh                          # 构建辅助脚本
 ├── README.md                         # 英文说明

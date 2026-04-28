@@ -146,14 +146,14 @@ memsaver.evict_region_pool_from_cache("weights", true, AllocationKind::REGULAR);
 只构建 `memsaver` target 的辅助脚本：
 
 ```bash
-./tests/run_all_cpp_tests.sh
+./tests/sh/run_all_cpp_tests.sh
 ```
 
 Torch 运行时测试：
 
 ```bash
-./tests/run_torch_basic_test.sh
-./tests/run_torch_arena_test.sh
+./tests/sh/run_torch_basic_test.sh
+./tests/sh/run_torch_arena_test.sh
 ```
 
 如果测试 target 已加入 CTest，也可以执行：
@@ -183,8 +183,8 @@ ctest --test-dir build --output-on-failure
 ├── src/internal/
 ├── tests/basic_test.cpp
 ├── tests/arena_test.cpp
-├── tests/test_utils.h
-├── tests/run_torch_basic_test.sh
-├── tests/run_torch_arena_test.sh
+├── tests/utils/test_utils.h
+├── tests/sh/run_torch_basic_test.sh
+├── tests/sh/run_torch_arena_test.sh
 └── build.sh
 ```
