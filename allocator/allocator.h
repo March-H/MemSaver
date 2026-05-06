@@ -5,6 +5,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 #include <cuda_runtime.h>
 
@@ -17,17 +18,28 @@ struct AllocatorStats {
   std::size_t num_ooms = 0;
 };
 
+using CudaMallocFn = std::function<cudaError_t(void**, std::size_t)>;
+using CudaFreeFn = std::function<cudaError_t(void*)>;
+
+class MemPool;
+class DeviceCachingAllocator;
+
 class CachingAllocator {
  public:
+  using CudaMallocFn = ::CudaMallocFn;
+  using CudaFreeFn = ::CudaFreeFn;
+
   static CachingAllocator& instance();
 
-  void create_or_incref_pool(int device, std::size_t mem_pool_id);
+  std::shared_ptr<MemPool> create_mem_pool(
+      std::size_t mem_pool_id,
+      CudaMallocFn custom_malloc = nullptr,
+      CudaFreeFn custom_free = nullptr);
   void begin_allocate_to_pool(
       int device,
       std::size_t mem_pool_id,
       std::function<bool(cudaStream_t)> filter);
   void end_allocate_to_pool(int device, std::size_t mem_pool_id);
-  void release_pool(int device, std::size_t mem_pool_id);
   void* malloc(std::size_t size, int device = 0, cudaStream_t stream = nullptr);
   void free(void* ptr);
   void record_stream(void* ptr, cudaStream_t stream);
@@ -35,7 +47,10 @@ class CachingAllocator {
   void empty_cache(int device);
 
  private:
-  class DeviceCachingAllocator;
+  struct AllocationContext {
+    std::shared_ptr<MemPool> mem_pool;
+    DeviceCachingAllocator* device_allocator;
+  };
 
   CachingAllocator();
   ~CachingAllocator();
@@ -43,21 +58,22 @@ class CachingAllocator {
   CachingAllocator(const CachingAllocator&) = delete;
   CachingAllocator& operator=(const CachingAllocator&) = delete;
 
-  DeviceCachingAllocator& device_allocator(int device);
+  std::shared_ptr<MemPool> mem_pool_for_stream(cudaStream_t stream);
+  void release_pool(int device, std::size_t mem_pool_id);
 
   mutable std::mutex mutex_;
-  std::unordered_map<int, std::unique_ptr<DeviceCachingAllocator>> devices_;
-  std::unordered_map<void*, DeviceCachingAllocator*> ptr_to_device_allocator_;
+  std::shared_ptr<MemPool> default_mem_pool_;
+  std::unordered_map<std::size_t, std::shared_ptr<MemPool>> mem_pools_;
+  std::vector<std::pair<std::size_t, std::function<bool(cudaStream_t)>>> active_mem_pools_;
+  std::unordered_map<void*, AllocationContext> ptr_to_allocation_context_;
 };
 
-namespace c10::cuda::CUDACachingAllocator {
-
-void createOrIncrefPool(int device, std::size_t mem_pool_id);
+std::shared_ptr<MemPool> createMemPool(
+    std::size_t mem_pool_id,
+    CudaMallocFn custom_malloc = nullptr,
+    CudaFreeFn custom_free = nullptr);
 void beginAllocateToPool(
     int device,
     std::size_t mem_pool_id,
     std::function<bool(cudaStream_t)> filter);
 void endAllocateToPool(int device, std::size_t mem_pool_id);
-void releasePool(int device, std::size_t mem_pool_id);
-
-}
