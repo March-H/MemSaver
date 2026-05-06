@@ -43,7 +43,6 @@ void CachingAllocator::end_allocate_to_pool(int device, std::size_t mem_pool_id)
   for (auto it = active_mem_pools_.rbegin(); it != active_mem_pools_.rend(); ++it) {
     if (it->first == mem_pool_id) {
       active_mem_pools_.erase(std::next(it).base());
-      release_pool(device, mem_pool_id);
       return;
     }
   }
@@ -56,7 +55,10 @@ void CachingAllocator::release_pool(int device, std::size_t mem_pool_id) {
       return;
     }
   }
-  mem_pools_.erase(mem_pool_id);
+  auto it = mem_pools_.find(mem_pool_id);
+  if (it != mem_pools_.end() && it->second.use_count() == 1) {
+    mem_pools_.erase(it);
+  }
 }
 
 std::shared_ptr<MemPool> CachingAllocator::mem_pool_for_stream(cudaStream_t stream) {
@@ -144,4 +146,8 @@ void beginAllocateToPool(
 
 void endAllocateToPool(int device, std::size_t mem_pool_id) {
   CachingAllocator::instance().end_allocate_to_pool(device, mem_pool_id);
+}
+
+void releasePool(int device, std::size_t mem_pool_id) {
+  CachingAllocator::instance().release_pool(device, mem_pool_id);
 }

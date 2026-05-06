@@ -40,6 +40,7 @@ class CachingAllocator {
       std::size_t mem_pool_id,
       std::function<bool(cudaStream_t)> filter);
   void end_allocate_to_pool(int device, std::size_t mem_pool_id);
+  void release_pool(int device, std::size_t mem_pool_id);
   void* malloc(std::size_t size, int device = 0, cudaStream_t stream = nullptr);
   void free(void* ptr);
   void record_stream(void* ptr, cudaStream_t stream);
@@ -59,7 +60,6 @@ class CachingAllocator {
   CachingAllocator& operator=(const CachingAllocator&) = delete;
 
   std::shared_ptr<MemPool> mem_pool_for_stream(cudaStream_t stream);
-  void release_pool(int device, std::size_t mem_pool_id);
 
   mutable std::mutex mutex_;
   std::shared_ptr<MemPool> default_mem_pool_;
@@ -77,3 +77,4 @@ void beginAllocateToPool(
     std::size_t mem_pool_id,
     std::function<bool(cudaStream_t)> filter);
 void endAllocateToPool(int device, std::size_t mem_pool_id);
+void releasePool(int device, std::size_t mem_pool_id);
