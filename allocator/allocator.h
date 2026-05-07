@@ -35,7 +35,7 @@ class CachingAllocator {
       std::size_t mem_pool_id,
       CudaMallocFn custom_malloc = nullptr,
       CudaFreeFn custom_free = nullptr,
-      bool use_custom_pool = false);
+      int use_custom_pool = 0);
   void begin_allocate_to_pool(
       int device,
       std::size_t mem_pool_id,
@@ -73,7 +73,7 @@ std::shared_ptr<MemPool> createMemPool(
     std::size_t mem_pool_id,
     CudaMallocFn custom_malloc = nullptr,
     CudaFreeFn custom_free = nullptr,
-    bool use_custom_pool = false);
+    int use_custom_pool = 0);
 void beginAllocateToPool(
     int device,
     std::size_t mem_pool_id,

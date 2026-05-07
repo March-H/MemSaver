@@ -79,13 +79,13 @@ class MemSaver {
       const std::string& tag,
       bool enable_cpu_backup,
       AllocationKind mode = AllocationKind::REGULAR,
-      bool use_custom_pool = false);
+      int use_custom_pool = 0);
   cudaError_t leave_region();
   cudaError_t evict_region_pool_from_cache(
       const std::string& tag,
       bool enable_cpu_backup,
       AllocationKind mode = AllocationKind::REGULAR,
-      bool use_custom_pool = false);
+      int use_custom_pool = 0);
 };
 ```
 

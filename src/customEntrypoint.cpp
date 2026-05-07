@@ -58,18 +58,18 @@ class ThreadLocalConfig {
     return owner_;
   }
 
-  void set_use_custom_pool(bool value) {
+  void set_use_custom_pool(int value) {
     use_custom_pool_ = value;
   }
 
-  bool use_custom_pool() const {
+  int use_custom_pool() const {
     return use_custom_pool_;
   }
 
  private:
   bool is_interesting_region_ = false;
   bool enable_cpu_backup_ = false;
-  bool use_custom_pool_ = false;
+  int use_custom_pool_ = 0;
   AllocationKind allocation_mode_ = AllocationKind::REGULAR;
   CUdevice device_ = 0;
   MemSaver* owner_ = nullptr;
@@ -81,7 +81,7 @@ struct MemSaver::RegionCacheKey {
   std::string tag;
   bool enable_cpu_backup = false;
   AllocationKind mode = AllocationKind::REGULAR;
-  bool use_custom_pool = false;
+  int use_custom_pool = 0;
 
   bool operator==(const RegionCacheKey& other) const {
     return tag == other.tag &&
@@ -222,7 +222,7 @@ struct MemSaver::RegionCacheKeyHash {
              (value << 6) + (value >> 2);
     value ^= std::hash<int>{}(static_cast<int>(key.mode)) + 0x9e3779b9 +
              (value << 6) + (value >> 2);
-    value ^= std::hash<bool>{}(key.use_custom_pool) + 0x9e3779b9 +
+    value ^= std::hash<int>{}(key.use_custom_pool) + 0x9e3779b9 +
              (value << 6) + (value >> 2);
     return value;
   }
@@ -249,7 +249,7 @@ std::shared_ptr<MemSaver::CachedPool> MemSaver::get_or_create_cached_pool(
     const std::string& tag,
     const bool enable_cpu_backup,
     const AllocationKind mode,
-    bool use_custom_pool) {
+    int use_custom_pool) {
   const RegionCacheKey key{
       tag,
       NormalizeEnableCpuBackup(enable_cpu_backup, mode),
@@ -281,7 +281,7 @@ std::shared_ptr<MemSaver::CachedPool> MemSaver::get_cached_pool(
     const std::string& tag,
     const bool enable_cpu_backup,
     const AllocationKind mode,
-    bool use_custom_pool) {
+    int use_custom_pool) {
   const RegionCacheKey key{
       tag,
       NormalizeEnableCpuBackup(enable_cpu_backup, mode),
@@ -299,7 +299,7 @@ cudaError_t MemSaver::enter_region(
     const std::string& tag,
     bool enable_cpu_backup,
     AllocationKind mode,
-    bool use_custom_pool) {
+    int use_custom_pool) {
   const cudaError_t mode_status = EnsureValidMode(mode);
   if (mode_status != cudaSuccess) {
     return mode_status;
@@ -370,7 +370,7 @@ cudaError_t MemSaver::evict_region_pool_from_cache(
     const std::string& tag,
     const bool enable_cpu_backup,
     const AllocationKind mode,
-    bool use_custom_pool) {
+    int use_custom_pool) {
   const cudaError_t mode_status = EnsureValidMode(mode);
   if (mode_status != cudaSuccess) {
     return mode_status;

@@ -44,7 +44,7 @@ void TestLoadOneModelWithCustomPool(MemSaver& memsaver, const ModelSpec& spec) {
   const uint64_t baseline = DeviceUsedBytes();
 
   CheckCuda(
-      memsaver.enter_region(spec.tag.c_str(), false, AllocationKind::REGULAR, true),
+      memsaver.enter_region(spec.tag.c_str(), false, AllocationKind::REGULAR, 1),
       ("enter_region(" + spec.tag + ")").c_str());
 
   uint64_t preallocated_delta = 0;
@@ -99,7 +99,7 @@ void TestLoadOneModelWithCustomPool(MemSaver& memsaver, const ModelSpec& spec) {
           spec.tag.c_str(),
           false,
           AllocationKind::REGULAR,
-          true),
+          1),
       ("evict_region_pool_from_cache(" + spec.tag + ")").c_str());
   ExpectMetadataCountByTag(
       spec.tag.c_str(),

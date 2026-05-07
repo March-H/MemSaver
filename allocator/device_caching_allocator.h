@@ -49,7 +49,7 @@ class DeviceCachingAllocator {
       int device,
       CudaMallocFn malloc_fn,
       CudaFreeFn free_fn,
-      bool use_custom_pool)
+      int use_custom_pool)
       : device_(device),
         malloc_fn_(std::move(malloc_fn)),
         free_fn_(std::move(free_fn)),
@@ -141,8 +141,11 @@ class DeviceCachingAllocator {
  private:
   BlockPool& get_pool(std::size_t size, cudaStream_t stream) {
     (void)stream;
-    if (use_custom_pool_) {
+    if (use_custom_pool_ == 2) {
       return custom_blocks_;
+    }
+    if (use_custom_pool_ == 1) {
+      return large_blocks_;
     }
     if (size <= kSmallSizeThreshold) {
       return small_blocks_;
@@ -305,7 +308,7 @@ class DeviceCachingAllocator {
   int device_ = 0;
   CudaMallocFn malloc_fn_;
   CudaFreeFn free_fn_;
-  bool use_custom_pool_ = false;
+  int use_custom_pool_ = 0;
   mutable std::mutex mutex_;
   std::size_t limit_bytes_ = static_cast<std::size_t>(-1);
   AllocatorStats stats_;
