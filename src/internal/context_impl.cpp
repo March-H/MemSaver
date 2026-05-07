@@ -41,18 +41,29 @@ void ContextImpl::ReleaseAllocationForShutdown(
     void* ptr,
     const AllocationMetadata& metadata) {
   if (metadata.state == AllocationState::ACTIVE) {
-    (void)CheckCu(cuMemUnmap(reinterpret_cast<CUdeviceptr>(ptr), metadata.size),
-                  "cuMemUnmap", __FILE__, __func__, __LINE__);
+    if (metadata.kind == AllocationKind::ARENA_VIRTUAL) {
+      const CUdeviceptr base = reinterpret_cast<CUdeviceptr>(ptr);
+      for (const auto& kv : metadata.arena_offset_handles) {
+        (void)CheckCu(
+            cuMemUnmap(base + static_cast<CUdeviceptr>(kv.first),
+                       kv.second.size),
+            "cuMemUnmap", __FILE__, __func__, __LINE__);
+      }
+    } else {
+      (void)CheckCu(cuMemUnmap(reinterpret_cast<CUdeviceptr>(ptr), metadata.size),
+                    "cuMemUnmap", __FILE__, __func__, __LINE__);
+    }
     if (metadata.kind == AllocationKind::REGULAR && metadata.alloc_handle != 0) {
       (void)CheckCu(cuMemRelease(metadata.alloc_handle), "cuMemRelease",
                     __FILE__, __func__, __LINE__);
     }
   }
 
-  if (metadata.kind == AllocationKind::ARENA) {
+  if (metadata.kind == AllocationKind::ARENA ||
+      metadata.kind == AllocationKind::ARENA_VIRTUAL) {
     for (const auto& kv : metadata.arena_offset_handles) {
-      if (kv.second != 0) {
-        (void)CheckCu(cuMemRelease(kv.second), "cuMemRelease", __FILE__,
+      if (kv.second.handle != 0) {
+        (void)CheckCu(cuMemRelease(kv.second.handle), "cuMemRelease", __FILE__,
                       __func__, __LINE__);
       }
     }
@@ -81,7 +92,8 @@ cudaError_t ContextImpl::Malloc(
   }
   RETURN_IF_FALSE(!config.enable_cpu_backup, cudaErrorInvalidValue,
                   "Malloc: ARENA allocation does not support cpu_backup now.");
-  RETURN_IF_CU_ERROR_AS_CUDA(MallocArena(ptr, device, size, config.tag));
+  RETURN_IF_CU_ERROR_AS_CUDA(
+      MallocArena(ptr, device, size, config.tag, config.allocation_mode));
   return cudaSuccess;
 }
 
@@ -150,12 +162,19 @@ cudaError_t ContextImpl::Free(void* ptr) {
       RETURN_IF_FALSE(metadata.alloc_handle != 0, cudaErrorInvalidValue,
                                "Free: active allocation handle should not be 0");
       RETURN_IF_CU_ERROR_AS_CUDA(cuMemRelease(metadata.alloc_handle));
-    } else {
-      // 释放arena
+    } else if (metadata.kind == AllocationKind::ARENA) {
       RETURN_IF_CU_ERROR_AS_CUDA(
           cuMemUnmap(reinterpret_cast<CUdeviceptr>(ptr), metadata.size));
       for (const auto& kv : metadata.arena_offset_handles) {
-        RETURN_IF_CU_ERROR_AS_CUDA(cuMemRelease(kv.second));
+        RETURN_IF_CU_ERROR_AS_CUDA(cuMemRelease(kv.second.handle));
+      }
+    } else {
+      const CUdeviceptr base = reinterpret_cast<CUdeviceptr>(ptr);
+      for (const auto& kv : metadata.arena_offset_handles) {
+        RETURN_IF_CU_ERROR_AS_CUDA(
+            cuMemUnmap(base + static_cast<CUdeviceptr>(kv.first),
+                       kv.second.size));
+        RETURN_IF_CU_ERROR_AS_CUDA(cuMemRelease(kv.second.handle));
       }
     }
   }
@@ -449,23 +468,26 @@ CUresult ContextImpl::MallocArena(
     void** ptr,
     const CUdevice device,
     const size_t size,
-    const std::string& tag) {
+    const std::string& tag,
+    const AllocationKind kind) {
 
   CUdeviceptr reserved_address = 0;
   RETURN_IF_CU_ERROR(cuMemAddressReserve(&reserved_address, size, 0, 0, 0));
 
-  size_t minimum_granularity_bytes = 0;
-  RETURN_IF_CU_ERROR(
-      vmm::GetVmmMinimumGranularity(device, &minimum_granularity_bytes));
-  RETURN_IF_CU_FALSE(minimum_granularity_bytes > 0, CUDA_ERROR_INVALID_VALUE,
-                     "CreateArena: minimum_granularity_bytes should be > 0");
-
   CUmemGenericAllocationHandle shared_handle = 0;
-  RETURN_IF_CU_ERROR(
-      GetOrCreateSharedMinimumGranularityHandle(device, &shared_handle));
-  RETURN_IF_CU_ERROR(MapRangeToEmptyHandle(
-      reserved_address, size, shared_handle, minimum_granularity_bytes));
-  RETURN_IF_CU_ERROR(vmm::SetAccess(reserved_address, size, device));
+  if (kind == AllocationKind::ARENA) {
+    size_t minimum_granularity_bytes = 0;
+    RETURN_IF_CU_ERROR(
+        vmm::GetVmmMinimumGranularity(device, &minimum_granularity_bytes));
+    RETURN_IF_CU_FALSE(minimum_granularity_bytes > 0, CUDA_ERROR_INVALID_VALUE,
+                       "CreateArena: minimum_granularity_bytes should be > 0");
+
+    RETURN_IF_CU_ERROR(
+        GetOrCreateSharedMinimumGranularityHandle(device, &shared_handle));
+    RETURN_IF_CU_ERROR(MapRangeToEmptyHandle(
+        reserved_address, size, shared_handle, minimum_granularity_bytes));
+    RETURN_IF_CU_ERROR(vmm::SetAccess(reserved_address, size, device));
+  }
 
   *ptr = reinterpret_cast<void*>(reserved_address);
   {
@@ -478,7 +500,7 @@ CUresult ContextImpl::MallocArena(
     metadata.enable_cpu_backup = false;
     metadata.cpu_backup = nullptr;
     metadata.alloc_handle = 0;
-    metadata.kind = AllocationKind::ARENA;
+    metadata.kind = kind;
     metadata.empty_handle = shared_handle;
     allocations_.emplace(*ptr, std::move(metadata));
   }
@@ -507,7 +529,8 @@ cudaError_t ContextImpl::ActivateArenaOffsets(
   void* arena_base_ptr = nullptr;
   AllocationMetadata* arena_metadata = nullptr;
   for (auto& kv : allocations_) {
-    if (kv.second.kind != AllocationKind::ARENA) {
+    if (kv.second.kind != AllocationKind::ARENA &&
+        kv.second.kind != AllocationKind::ARENA_VIRTUAL) {
       continue;
     }
     if (kv.second.device != device || kv.second.tag != tag) {
@@ -526,14 +549,17 @@ cudaError_t ContextImpl::ActivateArenaOffsets(
     const uint64_t offset = offsets[i];
     const CUdeviceptr address =
         reinterpret_cast<CUdeviceptr>(arena_base_ptr) + static_cast<CUdeviceptr>(offset);
-    RETURN_IF_CU_ERROR_AS_CUDA(cuMemUnmap(address, size));
+    if (arena_metadata->kind == AllocationKind::ARENA) {
+      RETURN_IF_CU_ERROR_AS_CUDA(cuMemUnmap(address, size));
+    }
 
     CUmemGenericAllocationHandle handle = 0;
     RETURN_IF_CU_ERROR_AS_CUDA(vmm::CreateMemoryHandle(&handle, size, device));
     RETURN_IF_CU_ERROR_AS_CUDA(cuMemMap(address, size, 0, handle, 0));
     RETURN_IF_CU_ERROR_AS_CUDA(vmm::SetAccess(address, size, device));
 
-    arena_metadata->arena_offset_handles[offset] = handle;
+    arena_metadata->arena_offset_handles[offset] =
+        AllocationMetadata::ArenaOffsetMapping{handle, size};
   }
 
   return cudaSuccess;
@@ -564,7 +590,8 @@ cudaError_t ContextImpl::DeactivateArenaOffsets(
   void* arena_base_ptr = nullptr;
   AllocationMetadata* arena_metadata = nullptr;
   for (auto& kv : allocations_) {
-    if (kv.second.kind != AllocationKind::ARENA) {
+    if (kv.second.kind != AllocationKind::ARENA &&
+        kv.second.kind != AllocationKind::ARENA_VIRTUAL) {
       continue;
     }
     if (kv.second.device != device || kv.second.tag != tag) {
@@ -586,19 +613,21 @@ cudaError_t ContextImpl::DeactivateArenaOffsets(
 
     RETURN_IF_CU_ERROR_AS_CUDA(cuMemUnmap(address, size));
 
-    const CUmemGenericAllocationHandle handle =
+    const AllocationMetadata::ArenaOffsetMapping mapping =
         arena_metadata->arena_offset_handles[offset];
 
-    RETURN_IF_CU_ERROR_AS_CUDA(cuMemRelease(handle));
-    size_t minimum_granularity_bytes = 0;
-    RETURN_IF_CU_ERROR_AS_CUDA(
-        vmm::GetVmmMinimumGranularity(device, &minimum_granularity_bytes));
-    RETURN_IF_CU_ERROR_AS_CUDA(MapRangeToEmptyHandle(
-        address,
-        size,
-        arena_metadata->empty_handle,
-        minimum_granularity_bytes));
-    RETURN_IF_CU_ERROR_AS_CUDA(vmm::SetAccess(address, size, device));
+    RETURN_IF_CU_ERROR_AS_CUDA(cuMemRelease(mapping.handle));
+    if (arena_metadata->kind == AllocationKind::ARENA) {
+      size_t minimum_granularity_bytes = 0;
+      RETURN_IF_CU_ERROR_AS_CUDA(
+          vmm::GetVmmMinimumGranularity(device, &minimum_granularity_bytes));
+      RETURN_IF_CU_ERROR_AS_CUDA(MapRangeToEmptyHandle(
+          address,
+          size,
+          arena_metadata->empty_handle,
+          minimum_granularity_bytes));
+      RETURN_IF_CU_ERROR_AS_CUDA(vmm::SetAccess(address, size, device));
+    }
 
     arena_metadata->arena_offset_handles.erase(offset);
   }

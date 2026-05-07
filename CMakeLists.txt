@@ -215,6 +215,9 @@ if(MEMSAVER_BUILD_TESTS)
       memsaver_custom_arena_test
       customTests/arena_test.cpp)
     add_memsaver_custom_test(
+      memsaver_custom_arena_virtual_test
+      customTests/arena_virtual_test.cpp)
+    add_memsaver_custom_test(
       memsaver_custom_model_load_test
       customTests/model_load_test.cpp
       tests/utils/model_loader.cpp)

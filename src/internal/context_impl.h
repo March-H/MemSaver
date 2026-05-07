@@ -29,7 +29,11 @@ struct AllocationMetadata {
   CUmemGenericAllocationHandle alloc_handle = 0;
   AllocationKind kind = AllocationKind::REGULAR;
   CUmemGenericAllocationHandle empty_handle = 0;
-  std::unordered_map<uint64_t, CUmemGenericAllocationHandle> arena_offset_handles;
+  struct ArenaOffsetMapping {
+    CUmemGenericAllocationHandle handle = 0;
+    size_t size = 0;
+  };
+  std::unordered_map<uint64_t, ArenaOffsetMapping> arena_offset_handles;
 };
 
 /** Thread-level runtime config used when dispatching memsaver_malloc. */
@@ -100,7 +104,8 @@ class ContextImpl {
       void** ptr,
       CUdevice device,
       size_t size,
-      const std::string& tag);
+      const std::string& tag,
+      AllocationKind kind);
   CUresult GetOrCreateSharedMinimumGranularityHandle(
       CUdevice device,
       CUmemGenericAllocationHandle* out_handle);

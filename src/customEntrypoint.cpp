@@ -93,7 +93,8 @@ struct MemSaver::RegionCacheKey {
 
 cudaError_t EnsureValidMode(const AllocationKind mode) {
   const bool valid = mode == AllocationKind::REGULAR ||
-                     mode == AllocationKind::ARENA;
+                     mode == AllocationKind::ARENA ||
+                     mode == AllocationKind::ARENA_VIRTUAL;
   RETURN_IF_FALSE(valid, cudaErrorInvalidValue,
                   "EnsureValidMode: invalid allocation mode");
   return cudaSuccess;

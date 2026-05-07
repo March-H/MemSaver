@@ -12,6 +12,7 @@
 enum class AllocationKind {
   REGULAR,
   ARENA,
+  ARENA_VIRTUAL,
 };
 
 class MemSaver {
