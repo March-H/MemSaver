@@ -17,13 +17,17 @@ CachingAllocator::~CachingAllocator() = default;
 std::shared_ptr<MemPool> CachingAllocator::create_mem_pool(
     std::size_t mem_pool_id,
     CudaMallocFn custom_malloc,
-    CudaFreeFn custom_free) {
+    CudaFreeFn custom_free,
+    bool use_custom_pool) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = mem_pools_.find(mem_pool_id);
   if (it != mem_pools_.end()) {
     return it->second;
   }
-  auto mem_pool = std::make_shared<MemPool>(std::move(custom_malloc), std::move(custom_free));
+  auto mem_pool = std::make_shared<MemPool>(
+      std::move(custom_malloc),
+      std::move(custom_free),
+      use_custom_pool);
   return mem_pools_.emplace(mem_pool_id, std::move(mem_pool)).first->second;
 }
 
@@ -130,11 +134,13 @@ void CachingAllocator::empty_cache(int device) {
 std::shared_ptr<MemPool> createMemPool(
     std::size_t mem_pool_id,
     CudaMallocFn custom_malloc,
-    CudaFreeFn custom_free) {
+    CudaFreeFn custom_free,
+    bool use_custom_pool) {
   return CachingAllocator::instance().create_mem_pool(
       mem_pool_id,
       std::move(custom_malloc),
-      std::move(custom_free));
+      std::move(custom_free),
+      use_custom_pool);
 }
 
 void beginAllocateToPool(

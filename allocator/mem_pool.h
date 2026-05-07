@@ -9,8 +9,13 @@
 
 class MemPool {
  public:
-  explicit MemPool(CudaMallocFn custom_malloc = nullptr, CudaFreeFn custom_free = nullptr)
-      : malloc_fn_(std::move(custom_malloc)), free_fn_(std::move(custom_free)) {
+  explicit MemPool(
+      CudaMallocFn custom_malloc = nullptr,
+      CudaFreeFn custom_free = nullptr,
+      bool use_custom_pool = false)
+      : malloc_fn_(std::move(custom_malloc)),
+        free_fn_(std::move(custom_free)),
+        use_custom_pool_(use_custom_pool) {
     if (!malloc_fn_) {
       malloc_fn_ = [](void** ptr, std::size_t size) {
         return cudaMalloc(ptr, size);
@@ -30,7 +35,11 @@ class MemPool {
       it = devices_
                .emplace(
                    device,
-                   std::make_unique<DeviceCachingAllocator>(device, malloc_fn_, free_fn_))
+                   std::make_unique<DeviceCachingAllocator>(
+                       device,
+                       malloc_fn_,
+                       free_fn_,
+                       use_custom_pool_))
                .first;
     }
     return *it->second;
@@ -51,5 +60,6 @@ class MemPool {
   mutable std::mutex mutex_;
   CudaMallocFn malloc_fn_;
   CudaFreeFn free_fn_;
+  bool use_custom_pool_ = false;
   std::unordered_map<int, std::unique_ptr<DeviceCachingAllocator>> devices_;
 };

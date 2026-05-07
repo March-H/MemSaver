@@ -43,9 +43,16 @@ void TestLoadOneModel(MemSaver& memsaver, const ModelSpec& spec) {
       memsaver.leave_region(),
       ("leave_region(" + spec.tag + ")").c_str());
 
+  const uint64_t observed_delta = CurrentDeltaBytes(baseline);
   CheckTrue(!loaded.tensors.empty(), "loaded model tensors should not be empty");
   CheckTrue(loaded.total_bytes != 0, "loaded model bytes should not be zero");
-  CheckTrue(CurrentDeltaBytes(baseline) >= loaded.total_bytes,
+  std::cout << "[" << CurrentTestName() << "] " << spec.tag
+            << " loaded total bytes == "
+            << loaded.total_bytes / 1024.0 / 1024.0 << " MB"
+            << ", observed allocation delta == "
+            << observed_delta / 1024.0 / 1024.0 << " MB"
+            << std::endl;
+  CheckTrue(observed_delta >= loaded.total_bytes,
             "observed model allocation delta should cover loaded tensor bytes");
   CheckTrue(MetadataCountByTag(spec.tag, spec.tag + " metadata count") != 0,
             "loaded model should create managed metadata");

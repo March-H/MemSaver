@@ -58,9 +58,18 @@ class ThreadLocalConfig {
     return owner_;
   }
 
+  void set_use_custom_pool(bool value) {
+    use_custom_pool_ = value;
+  }
+
+  bool use_custom_pool() const {
+    return use_custom_pool_;
+  }
+
  private:
   bool is_interesting_region_ = false;
   bool enable_cpu_backup_ = false;
+  bool use_custom_pool_ = false;
   AllocationKind allocation_mode_ = AllocationKind::REGULAR;
   CUdevice device_ = 0;
   MemSaver* owner_ = nullptr;
@@ -72,11 +81,13 @@ struct MemSaver::RegionCacheKey {
   std::string tag;
   bool enable_cpu_backup = false;
   AllocationKind mode = AllocationKind::REGULAR;
+  bool use_custom_pool = false;
 
   bool operator==(const RegionCacheKey& other) const {
     return tag == other.tag &&
            enable_cpu_backup == other.enable_cpu_backup &&
-           mode == other.mode;
+           mode == other.mode &&
+           use_custom_pool == other.use_custom_pool;
   }
 };
 
@@ -211,6 +222,8 @@ struct MemSaver::RegionCacheKeyHash {
              (value << 6) + (value >> 2);
     value ^= std::hash<int>{}(static_cast<int>(key.mode)) + 0x9e3779b9 +
              (value << 6) + (value >> 2);
+    value ^= std::hash<bool>{}(key.use_custom_pool) + 0x9e3779b9 +
+             (value << 6) + (value >> 2);
     return value;
   }
 };
@@ -235,18 +248,21 @@ MemSaver::~MemSaver() = default;
 std::shared_ptr<MemSaver::CachedPool> MemSaver::get_or_create_cached_pool(
     const std::string& tag,
     const bool enable_cpu_backup,
-    const AllocationKind mode) {
+    const AllocationKind mode,
+    bool use_custom_pool) {
   const RegionCacheKey key{
       tag,
       NormalizeEnableCpuBackup(enable_cpu_backup, mode),
-      mode};
+      mode,
+      use_custom_pool};
   std::lock_guard<std::mutex> guard(impl_->mutex);
   const auto it = impl_->cached_pools.find(key);
   if (it != impl_->cached_pools.end()) {
     it->second->pool = createMemPool(
         it->second->pool_id,
         memsaver_malloc,
-        memsaver_free);
+        memsaver_free,
+        use_custom_pool);
     return it->second;
   }
 
@@ -255,7 +271,8 @@ std::shared_ptr<MemSaver::CachedPool> MemSaver::get_or_create_cached_pool(
   cached_pool->pool = createMemPool(
       cached_pool->pool_id,
       memsaver_malloc,
-      memsaver_free);
+      memsaver_free,
+      use_custom_pool);
   impl_->cached_pools.emplace(key, cached_pool);
   return cached_pool;
 }
@@ -263,11 +280,13 @@ std::shared_ptr<MemSaver::CachedPool> MemSaver::get_or_create_cached_pool(
 std::shared_ptr<MemSaver::CachedPool> MemSaver::get_cached_pool(
     const std::string& tag,
     const bool enable_cpu_backup,
-    const AllocationKind mode) {
+    const AllocationKind mode,
+    bool use_custom_pool) {
   const RegionCacheKey key{
       tag,
       NormalizeEnableCpuBackup(enable_cpu_backup, mode),
-      mode};
+      mode,
+      use_custom_pool};
   std::lock_guard<std::mutex> guard(impl_->mutex);
   const auto it = impl_->cached_pools.find(key);
   if (it == impl_->cached_pools.end()) {
@@ -279,7 +298,8 @@ std::shared_ptr<MemSaver::CachedPool> MemSaver::get_cached_pool(
 cudaError_t MemSaver::enter_region(
     const std::string& tag,
     bool enable_cpu_backup,
-    AllocationKind mode) {
+    AllocationKind mode,
+    bool use_custom_pool) {
   const cudaError_t mode_status = EnsureValidMode(mode);
   if (mode_status != cudaSuccess) {
     return mode_status;
@@ -297,7 +317,7 @@ cudaError_t MemSaver::enter_region(
   }
 
   std::shared_ptr<CachedPool> cached_pool =
-      get_or_create_cached_pool(tag, enable_cpu_backup, mode);
+      get_or_create_cached_pool(tag, enable_cpu_backup, mode, use_custom_pool);
   {
     std::lock_guard<std::mutex> guard(impl_->mutex);
     cached_pool->devices.insert(current_device);
@@ -310,6 +330,7 @@ cudaError_t MemSaver::enter_region(
   thread_local_config.set_allocation_mode(mode);
   thread_local_config.set_device(current_device);
   thread_local_config.set_owner(this);
+  thread_local_config.set_use_custom_pool(use_custom_pool);
 
   beginAllocateToPool(
       static_cast<int>(current_device),
@@ -328,7 +349,8 @@ cudaError_t MemSaver::leave_region() {
   std::shared_ptr<CachedPool> cached_pool = get_or_create_cached_pool(
       thread_local_config.current_tag_,
       thread_local_config.enable_cpu_backup(),
-      thread_local_config.get_allocation_mode());
+      thread_local_config.get_allocation_mode(),
+      thread_local_config.use_custom_pool());
   RETURN_IF_FALSE(
       cached_pool != nullptr,
       cudaErrorInvalidValue,
@@ -347,7 +369,8 @@ cudaError_t MemSaver::leave_region() {
 cudaError_t MemSaver::evict_region_pool_from_cache(
     const std::string& tag,
     const bool enable_cpu_backup,
-    const AllocationKind mode) {
+    const AllocationKind mode,
+    bool use_custom_pool) {
   const cudaError_t mode_status = EnsureValidMode(mode);
   if (mode_status != cudaSuccess) {
     return mode_status;
@@ -364,7 +387,11 @@ cudaError_t MemSaver::evict_region_pool_from_cache(
   std::size_t pool_id = 0;
   std::unordered_set<CUdevice> devices;
   {
-    const RegionCacheKey key{tag, normalized_enable_cpu_backup, mode};
+    const RegionCacheKey key{
+        tag,
+        normalized_enable_cpu_backup,
+        mode,
+        use_custom_pool};
     std::lock_guard<std::mutex> guard(impl_->mutex);
     const auto it = impl_->cached_pools.find(key);
     if (it != impl_->cached_pools.end()) {
