@@ -27,13 +27,13 @@ class MemSaver {
       const std::string& tag,
       bool enable_cpu_backup,
       AllocationKind mode = AllocationKind::REGULAR,
-      int use_custom_pool = 0);
+      int block_pool_type = 0);
   cudaError_t leave_region();
   cudaError_t evict_region_pool_from_cache(
       const std::string& tag,
       bool enable_cpu_backup,
       AllocationKind mode = AllocationKind::REGULAR,
-      int use_custom_pool = 0);
+      int block_pool_type = 0);
 
  private:
   struct RegionCacheKey;
@@ -45,12 +45,12 @@ class MemSaver {
       const std::string& tag,
       bool enable_cpu_backup,
       AllocationKind mode,
-      int use_custom_pool = 0);
+      int block_pool_type = 0);
   std::shared_ptr<CachedPool> get_cached_pool(
       const std::string& tag,
       bool enable_cpu_backup,
       AllocationKind mode,
-      int use_custom_pool = 0);
+      int block_pool_type = 0);
 
   std::unique_ptr<Impl> impl_;
 };

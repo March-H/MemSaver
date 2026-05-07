@@ -18,7 +18,7 @@ std::shared_ptr<MemPool> CachingAllocator::create_mem_pool(
     std::size_t mem_pool_id,
     CudaMallocFn custom_malloc,
     CudaFreeFn custom_free,
-    int use_custom_pool) {
+    int block_pool_type) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = mem_pools_.find(mem_pool_id);
   if (it != mem_pools_.end()) {
@@ -27,7 +27,7 @@ std::shared_ptr<MemPool> CachingAllocator::create_mem_pool(
   auto mem_pool = std::make_shared<MemPool>(
       std::move(custom_malloc),
       std::move(custom_free),
-      use_custom_pool);
+      block_pool_type);
   return mem_pools_.emplace(mem_pool_id, std::move(mem_pool)).first->second;
 }
 
@@ -135,12 +135,12 @@ std::shared_ptr<MemPool> createMemPool(
     std::size_t mem_pool_id,
     CudaMallocFn custom_malloc,
     CudaFreeFn custom_free,
-    int use_custom_pool) {
+    int block_pool_type) {
   return CachingAllocator::instance().create_mem_pool(
       mem_pool_id,
       std::move(custom_malloc),
       std::move(custom_free),
-      use_custom_pool);
+      block_pool_type);
 }
 
 void beginAllocateToPool(
