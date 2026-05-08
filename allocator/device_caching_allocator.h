@@ -2,9 +2,11 @@
 
 #include "allocator.h"
 #include "block.h"
+#include "memsaver/entrypoint.h"
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -20,6 +22,7 @@ inline constexpr std::size_t kLargeSizeThreshold = 10ULL << 20;
 inline constexpr std::size_t kSmallBuffer = 2ULL << 20;
 inline constexpr std::size_t kLargeBuffer = 20ULL << 20;
 inline constexpr std::size_t kRoundLarge = 2ULL << 20;
+inline constexpr std::size_t kArenaVirtualMinimumActivation = 20ULL << 20;
 
 inline std::size_t round_up(std::size_t size, std::size_t alignment) {
   return ((size + alignment - 1) / alignment) * alignment;
@@ -141,7 +144,9 @@ class DeviceCachingAllocator {
  private:
   BlockPool& get_pool(std::size_t size, cudaStream_t stream) {
     (void)stream;
-    if (block_pool_type_ == 2) {
+    if (block_pool_type_ == 3) {
+      return arena_virtual_blocks_;
+    } else if (block_pool_type_ == 2) {
       return custom_blocks_;
     } else if (block_pool_type_ == 1) {
       return large_blocks_;
@@ -152,11 +157,54 @@ class DeviceCachingAllocator {
     return large_blocks_;
   }
 
+  bool is_arena_virtual_pool(const BlockPool& pool) const {
+    return &pool == &arena_virtual_blocks_;
+  }
+
+  std::size_t get_arena_virtual_activation_size(std::size_t size) const {
+    if (size <= kArenaVirtualMinimumActivation) {
+      return kArenaVirtualMinimumActivation;
+    }
+    return round_up(size, kRoundLarge);
+  }
+
+  Block* root_block(Block* block) const {
+    while (block->prev != nullptr) {
+      block = block->prev;
+    }
+    return block;
+  }
+
+  void activate_arena_virtual_block(Block* block, std::size_t size) {
+    if (block->active_size >= size) {
+      return;
+    }
+    const std::size_t activation_size =
+        get_arena_virtual_activation_size(size - block->active_size);
+    Block* root = root_block(block);
+    const uint64_t offset =
+        static_cast<uint64_t>(
+            static_cast<char*>(block->ptr) - static_cast<char*>(root->ptr)) +
+        static_cast<uint64_t>(block->active_size);
+    const cudaError_t error = memsaver_activate_arena_offsets(
+        memsaver_current_region_tag(),
+        &offset,
+        1ULL,
+        static_cast<uint64_t>(activation_size));
+    if (error != cudaSuccess) {
+      throw_cuda_error(error, "memsaver_activate_arena_offsets");
+    }
+    block->active_size += activation_size;
+  }
+
   Block* find_free_block(BlockPool& pool, std::size_t size, cudaStream_t stream) {
     ++pool.get_free_blocks_call_count;
     Block search_key(device_, stream, size);
     for (auto it = pool.blocks.lower_bound(&search_key); it != pool.blocks.end(); ++it) {
       if ((*it)->stream == stream) {
+        if (is_arena_virtual_pool(pool)) {
+          activate_arena_virtual_block(*it, size);
+        }
         return *it;
       }
     }
@@ -193,6 +241,9 @@ class DeviceCachingAllocator {
     }
 
     Block* block = new Block(device_, stream, allocation_size, &pool, ptr);
+    if (!is_arena_virtual_pool(pool)) {
+      block->active_size = allocation_size;
+    }
     blocks_.push_back(block);
     stats_.reserved_bytes += allocation_size;
     stats_.max_reserved_bytes = std::max(stats_.max_reserved_bytes, stats_.reserved_bytes);
@@ -315,6 +366,7 @@ class DeviceCachingAllocator {
   BlockPool small_blocks_{true};
   BlockPool large_blocks_{false};
   BlockPool custom_blocks_{false};
+  BlockPool arena_virtual_blocks_{false};
   std::deque<std::pair<cudaEvent_t, Block*>> cuda_events_;
   std::vector<Block*> blocks_;
 };

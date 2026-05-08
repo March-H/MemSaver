@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -33,7 +34,8 @@ struct Block {
   cudaStream_t stream;
   int32_t registration_counter{-1};
   std::size_t size;
-  BlockPool* pool{nullptr}; // 记录归属于哪个BlockPool
+  std::size_t active_size{0};
+  BlockPool* pool{nullptr};
   void* ptr{nullptr};
   bool allocated{false};
   Block* prev{nullptr};
@@ -80,8 +82,10 @@ struct Block {
         size - first_size,
         pool,
         static_cast<char*>(ptr) + first_size);
+    remainder->active_size = active_size > first_size ? active_size - first_size : 0;
     remainder->splice(this, next);
     size = first_size;
+    active_size = std::min(active_size, first_size);
     return remainder;
   }
 
@@ -93,7 +97,9 @@ struct Block {
   }
 
   void merge(Block* after) {
+    const std::size_t old_size = size;
     size += after->size;
+    active_size = active_size == old_size ? old_size + after->active_size : active_size;
     next = after->next;
     if (next != nullptr) {
       next->prev = this;
