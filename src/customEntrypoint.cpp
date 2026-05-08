@@ -170,6 +170,10 @@ cudaError_t memsaver_empty_cache() {
   return cudaSuccess;
 }
 
+const char* memsaver_current_region_tag() {
+  return thread_local_config.current_tag_.c_str();
+}
+
 cudaError_t memsaver_activate_arena_offsets(
     const char* tag,
     const uint64_t* offsets,

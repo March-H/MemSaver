@@ -65,6 +65,7 @@ void memsaver_torch_free(void* ptr, size_t size, int device, cudaStream_t stream
 cudaError_t memsaver_pause(const char* tag_or_null);
 cudaError_t memsaver_resume(const char* tag_or_null);
 cudaError_t memsaver_empty_cache();
+const char* memsaver_current_region_tag();
 
 cudaError_t memsaver_activate_arena_offsets(
     const char* tag,
