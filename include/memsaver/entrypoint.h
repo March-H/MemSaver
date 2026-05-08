@@ -59,9 +59,6 @@ class MemSaver {
 cudaError_t memsaver_malloc(void** ptr, size_t size);
 cudaError_t memsaver_free(void* ptr);
 
-void* memsaver_torch_malloc(size_t size, int device, cudaStream_t stream);
-void memsaver_torch_free(void* ptr, size_t size, int device, cudaStream_t stream);
-
 cudaError_t memsaver_pause(const char* tag_or_null);
 cudaError_t memsaver_resume(const char* tag_or_null);
 cudaError_t memsaver_empty_cache();

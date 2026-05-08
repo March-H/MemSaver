@@ -1,71 +1,78 @@
 #include "memsaver/entrypoint.h"
 
 #include <functional>
-#include <mutex>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#include <vector>
 
-#include <c10/cuda/CUDACachingAllocator.h>
-#include <torch/csrc/cuda/CUDAPluggableAllocator.h>
-
+#include "allocator/allocator.h"
+#include "allocator/mem_pool.h"
 #include "internal/context_impl.h"
 #include "internal/utils.h"
 
 class ThreadLocalConfig {
-public:
-    std::string current_tag_ = "";
+ public:
+  std::string current_tag_ = "";
 
-    bool is_interesting_region() const {
-        return is_interesting_region_;
-    }
+  bool is_interesting_region() const {
+    return is_interesting_region_;
+  }
 
-    void set_interesting_region(bool value) {
-        is_interesting_region_ = value;
-    }
+  void set_interesting_region(bool value) {
+    is_interesting_region_ = value;
+  }
 
-    bool enable_cpu_backup() const {
-        return enable_cpu_backup_;
-    }
+  bool enable_cpu_backup() const {
+    return enable_cpu_backup_;
+  }
 
-    void set_enable_cpu_backup(bool value) {
-        enable_cpu_backup_ = value;
-    }
+  void set_enable_cpu_backup(bool value) {
+    enable_cpu_backup_ = value;
+  }
 
-    void set_allocation_mode(AllocationKind mode) {
-        allocation_mode_ = mode;
-    }
+  void set_allocation_mode(AllocationKind mode) {
+    allocation_mode_ = mode;
+  }
 
-    AllocationKind get_allocation_mode() const {
-        return allocation_mode_;
-    }
+  AllocationKind get_allocation_mode() const {
+    return allocation_mode_;
+  }
 
-    void set_device(CUdevice device) {
-        device_ = device;
-    }
+  void set_device(CUdevice device) {
+    device_ = device;
+  }
 
-    CUdevice get_device() const {
-        return device_;
-    }
+  CUdevice get_device() const {
+    return device_;
+  }
 
-    void set_owner(MemSaver* owner) {
-        owner_ = owner;
-    }
+  void set_owner(MemSaver* owner) {
+    owner_ = owner;
+  }
 
-    MemSaver* get_owner() const {
-        return owner_;
-    }
+  MemSaver* get_owner() const {
+    return owner_;
+  }
 
-private:
-    bool is_interesting_region_ = false;
-    bool enable_cpu_backup_ = false;
-    AllocationKind allocation_mode_ = AllocationKind::REGULAR;
-    CUdevice device_ = 0;
-    MemSaver* owner_ = nullptr;
+  void set_block_pool_type(int value) {
+    block_pool_type_ = value;
+  }
+
+  int block_pool_type() const {
+    return block_pool_type_;
+  }
+
+ private:
+  bool is_interesting_region_ = false;
+  bool enable_cpu_backup_ = false;
+  int block_pool_type_ = 0;
+  AllocationKind allocation_mode_ = AllocationKind::REGULAR;
+  CUdevice device_ = 0;
+  MemSaver* owner_ = nullptr;
 };
 
 thread_local ThreadLocalConfig thread_local_config;
@@ -74,11 +81,13 @@ struct MemSaver::RegionCacheKey {
   std::string tag;
   bool enable_cpu_backup = false;
   AllocationKind mode = AllocationKind::REGULAR;
+  int block_pool_type = 0;
 
   bool operator==(const RegionCacheKey& other) const {
     return tag == other.tag &&
            enable_cpu_backup == other.enable_cpu_backup &&
-           mode == other.mode;
+           mode == other.mode &&
+           block_pool_type == other.block_pool_type;
   }
 };
 
@@ -129,11 +138,11 @@ cudaError_t memsaver_free(void* ptr) {
   return ContextImpl::instance().Free(ptr);
 }
 
-void* memsaver_torch_malloc(size_t size, int device, cudaStream_t stream) {
+void* memsaver_allocator_malloc(size_t size, int device, cudaStream_t stream) {
   (void)device;
   (void)stream;
   if (!thread_local_config.is_interesting_region()) {
-    LOGE("memsaver_torch_malloc requires an interesting region");
+    LOGE("memsaver_allocator_malloc requires an interesting region");
     return nullptr;
   }
   void* ptr = nullptr;
@@ -143,7 +152,7 @@ void* memsaver_torch_malloc(size_t size, int device, cudaStream_t stream) {
   return ptr;
 }
 
-void memsaver_torch_free(void* ptr, size_t size, int device, cudaStream_t stream) {
+void memsaver_allocator_free(void* ptr, size_t size, int device, cudaStream_t stream) {
   (void)size;
   (void)device;
   (void)stream;
@@ -161,7 +170,7 @@ cudaError_t memsaver_resume(const char* tag_or_null) {
 }
 
 cudaError_t memsaver_empty_cache() {
-  c10::cuda::CUDACachingAllocator::emptyCache();
+  CachingAllocator::instance().empty_cache();
   return cudaSuccess;
 }
 
@@ -215,24 +224,28 @@ cudaError_t memsaver_get_cpu_backup_pointer(
   return ContextImpl::instance().GetCpuBackupPointer(gpu_ptr, size, out_cpu_ptr);
 }
 
-
 struct MemSaver::RegionCacheKeyHash {
   size_t operator()(const RegionCacheKey& key) const {
     size_t value = std::hash<std::string>{}(key.tag);
-    value ^= std::hash<bool>{}(key.enable_cpu_backup) + 0x9e3779b9 + (value << 6) + (value >> 2);
-    value ^= std::hash<int>{}(static_cast<int>(key.mode)) + 0x9e3779b9 + (value << 6) + (value >> 2);
+    value ^= std::hash<bool>{}(key.enable_cpu_backup) + 0x9e3779b9 +
+             (value << 6) + (value >> 2);
+    value ^= std::hash<int>{}(static_cast<int>(key.mode)) + 0x9e3779b9 +
+             (value << 6) + (value >> 2);
+    value ^= std::hash<int>{}(key.block_pool_type) + 0x9e3779b9 +
+             (value << 6) + (value >> 2);
     return value;
   }
 };
 
 struct MemSaver::CachedPool {
-  std::shared_ptr<c10::cuda::CUDACachingAllocator::CUDAAllocator> allocator;
-  std::unique_ptr<c10::cuda::MemPool> pool;
+  std::size_t pool_id = 0;
+  std::shared_ptr<MemPool> pool;
   std::unordered_set<CUdevice> devices;
 };
 
 struct MemSaver::Impl {
   std::mutex mutex;
+  std::size_t next_pool_id = 1;
   std::unordered_map<RegionCacheKey, std::shared_ptr<CachedPool>, RegionCacheKeyHash>
       cached_pools;
 };
@@ -246,24 +259,29 @@ std::shared_ptr<MemSaver::CachedPool> MemSaver::get_or_create_cached_pool(
     const bool enable_cpu_backup,
     const AllocationKind mode,
     int block_pool_type) {
-  (void)block_pool_type;
   const RegionCacheKey key{
       tag,
       NormalizeEnableCpuBackup(enable_cpu_backup, mode),
-      mode};
+      mode,
+      block_pool_type};
   std::lock_guard<std::mutex> guard(impl_->mutex);
   const auto it = impl_->cached_pools.find(key);
   if (it != impl_->cached_pools.end()) {
+    it->second->pool = createMemPool(
+        it->second->pool_id,
+        memsaver_malloc,
+        memsaver_free,
+        block_pool_type);
     return it->second;
   }
 
   auto cached_pool = std::make_shared<CachedPool>();
-  cached_pool->allocator =
-      torch::cuda::CUDAPluggableAllocator::createCustomAllocator(
-          memsaver_torch_malloc,
-          memsaver_torch_free);
-  cached_pool->pool = std::make_unique<c10::cuda::MemPool>(
-      cached_pool->allocator.get());
+  cached_pool->pool_id = impl_->next_pool_id++;
+  cached_pool->pool = createMemPool(
+      cached_pool->pool_id,
+      memsaver_malloc,
+      memsaver_free,
+      block_pool_type);
   impl_->cached_pools.emplace(key, cached_pool);
   return cached_pool;
 }
@@ -273,11 +291,11 @@ std::shared_ptr<MemSaver::CachedPool> MemSaver::get_cached_pool(
     const bool enable_cpu_backup,
     const AllocationKind mode,
     int block_pool_type) {
-  (void)block_pool_type;
   const RegionCacheKey key{
       tag,
       NormalizeEnableCpuBackup(enable_cpu_backup, mode),
-      mode};
+      mode,
+      block_pool_type};
   std::lock_guard<std::mutex> guard(impl_->mutex);
   const auto it = impl_->cached_pools.find(key);
   if (it == impl_->cached_pools.end()) {
@@ -291,13 +309,11 @@ cudaError_t MemSaver::enter_region(
     bool enable_cpu_backup,
     AllocationKind mode,
     int block_pool_type) {
-  (void)block_pool_type;
   const cudaError_t mode_status = EnsureValidMode(mode);
   if (mode_status != cudaSuccess) {
     return mode_status;
   }
 
-  // 禁止嵌套region
   RETURN_IF_FALSE(
       !thread_local_config.is_interesting_region(),
       cudaErrorInvalidValue,
@@ -310,7 +326,7 @@ cudaError_t MemSaver::enter_region(
   }
 
   std::shared_ptr<CachedPool> cached_pool =
-      get_or_create_cached_pool(tag, enable_cpu_backup, mode);
+      get_or_create_cached_pool(tag, enable_cpu_backup, mode, block_pool_type);
   {
     std::lock_guard<std::mutex> guard(impl_->mutex);
     cached_pool->devices.insert(current_device);
@@ -323,11 +339,11 @@ cudaError_t MemSaver::enter_region(
   thread_local_config.set_allocation_mode(mode);
   thread_local_config.set_device(current_device);
   thread_local_config.set_owner(this);
+  thread_local_config.set_block_pool_type(block_pool_type);
 
-  const c10::DeviceIndex device = static_cast<c10::DeviceIndex>(current_device);
-  c10::cuda::CUDACachingAllocator::beginAllocateToPool(
-      device,
-      cached_pool->pool->id(),
+  beginAllocateToPool(
+      static_cast<int>(current_device),
+      cached_pool->pool_id,
       [](cudaStream_t) { return true; });
   return cudaSuccess;
 }
@@ -342,33 +358,28 @@ cudaError_t MemSaver::leave_region() {
   std::shared_ptr<CachedPool> cached_pool = get_or_create_cached_pool(
       thread_local_config.current_tag_,
       thread_local_config.enable_cpu_backup(),
-      thread_local_config.get_allocation_mode());
+      thread_local_config.get_allocation_mode(),
+      thread_local_config.block_pool_type());
   RETURN_IF_FALSE(
       cached_pool != nullptr,
       cudaErrorInvalidValue,
       "leave_region: cached pool not found");
 
-  const c10::DeviceIndex device =
-      static_cast<c10::DeviceIndex>(thread_local_config.get_device());
-  const c10::cuda::MempoolId_t mempool_id = cached_pool->pool->id();
-
-  c10::cuda::CUDACachingAllocator::endAllocateToPool(
-      device,
-      mempool_id);
-  c10::cuda::CUDACachingAllocator::releasePool(
-      device,
-      mempool_id);
+  endAllocateToPool(
+      static_cast<int>(thread_local_config.get_device()),
+      cached_pool->pool_id);
+  releasePool(
+      static_cast<int>(thread_local_config.get_device()),
+      cached_pool->pool_id);
   thread_local_config = ThreadLocalConfig{};
   return cudaSuccess;
 }
 
-// 由于torch的mem_pool的析构机制，当将pool内没有使用中的tensor并调用这个函数后，等价于触发这个pool的析构
 cudaError_t MemSaver::evict_region_pool_from_cache(
     const std::string& tag,
     const bool enable_cpu_backup,
     const AllocationKind mode,
     int block_pool_type) {
-  (void)block_pool_type;
   const cudaError_t mode_status = EnsureValidMode(mode);
   if (mode_status != cudaSuccess) {
     return mode_status;
@@ -382,14 +393,29 @@ cudaError_t MemSaver::evict_region_pool_from_cache(
   const bool normalized_enable_cpu_backup =
       NormalizeEnableCpuBackup(enable_cpu_backup, mode);
 
+  std::size_t pool_id = 0;
+  std::unordered_set<CUdevice> devices;
   {
-    const RegionCacheKey key{tag, normalized_enable_cpu_backup, mode};
+    const RegionCacheKey key{
+        tag,
+        normalized_enable_cpu_backup,
+        mode,
+        block_pool_type};
     std::lock_guard<std::mutex> guard(impl_->mutex);
     const auto it = impl_->cached_pools.find(key);
     if (it != impl_->cached_pools.end()) {
+      pool_id = it->second->pool_id;
+      devices = it->second->devices;
       impl_->cached_pools.erase(it);
     }
   }
 
-  return cudaSuccess;
+  for (const CUdevice device : devices) {
+    releasePool(static_cast<int>(device), pool_id);
+  }
+
+  return ContextImpl::instance().ReleaseAllocations(
+      tag,
+      normalized_enable_cpu_backup,
+      mode);
 }

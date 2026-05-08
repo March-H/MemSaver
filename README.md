@@ -1,6 +1,6 @@
 # MemSaver
 
-MemSaver is a C++/CUDA library that integrates with PyTorch's CUDA caching allocator at the MemPool and segment layer. It lets you route allocations in a tagged region into a dedicated pool, pause and resume managed GPU memory while keeping virtual addresses stable, and switch between regular and arena-style allocation behavior.
+MemSaver is a C++/CUDA library with its own CUDA caching allocator and region-aware memory pools. It lets you route allocations in a tagged region into a dedicated pool, pause and resume managed GPU memory while keeping virtual addresses stable, and switch between regular and arena-style allocation behavior.
 
 This repository exposes the public header [`include/memsaver/entrypoint.h`](./include/memsaver/entrypoint.h) and the `memsaver` library target.
 
@@ -11,7 +11,7 @@ This repository exposes the public header [`include/memsaver/entrypoint.h`](./in
 - Pause and resume for managed allocations
 - Optional CPU backup for regular allocations
 - Arena mode with explicit offset activation and deactivation
-- Torch-based runtime tests for both regular and arena behavior
+- Runtime tests for regular, arena, arena-virtual, and model-loading behavior
 
 ## Requirements
 
@@ -19,9 +19,9 @@ This repository exposes the public header [`include/memsaver/entrypoint.h`](./in
 - CUDA toolkit
 - CMake 3.20 or newer
 - C++17
-- PyTorch or LibTorch available to CMake
+- PyTorch or LibTorch available to CMake when building tests
 
-`CMakeLists.txt` first tries `find_package(Torch)` and then falls back to `python -c "import torch; print(torch.utils.cmake_prefix_path)"` to locate the Torch CMake package. In practice, the current source tree expects Torch headers and libraries to be available when building `memsaver`.
+`CMakeLists.txt` first tries `find_package(Torch)` and then falls back to `python -c "import torch; print(torch.utils.cmake_prefix_path)"` to locate the Torch CMake package for the runtime tests.
 
 ## Build
 
@@ -44,15 +44,17 @@ Build output:
 
 Optional test binaries are built when Torch is found:
 
-- `memsaver_torch_basic_test`
-- `memsaver_torch_arena_test`
+- `memsaver_basic_test`
+- `memsaver_arena_test`
+- `memsaver_arena_virtual_test`
+- `memsaver_model_load_test`
 
 You can also build specific targets:
 
 ```bash
 ./build.sh --target memsaver
-./build.sh --target memsaver_torch_basic_test
-./build.sh --target memsaver_torch_arena_test
+./build.sh --target memsaver_basic_test
+./build.sh --target memsaver_arena_test
 ```
 
 ## Install And Consume
@@ -92,7 +94,6 @@ class MemSaver {
 Additional exported functions in [`include/memsaver/entrypoint.h`](./include/memsaver/entrypoint.h):
 
 - `memsaver_malloc` and `memsaver_free`
-- `memsaver_torch_malloc` and `memsaver_torch_free`
 - `memsaver_pause` and `memsaver_resume`
 - `memsaver_empty_cache`
 - `memsaver_activate_arena_offsets`
@@ -125,7 +126,7 @@ memsaver.evict_region_pool_from_cache("weights", true, AllocationKind::REGULAR);
 - Regions are thread-local.
 - Nested regions on the same thread are rejected.
 - Child threads do not inherit an active region; they must call `enter_region` themselves.
-- `leave_region()` stops routing allocations into the region pool and releases the pool back to Torch's allocator, but the cached pool entry remains reusable until `evict_region_pool_from_cache(...)` removes it.
+- `leave_region()` stops routing allocations into the region pool and releases the pool back to the MemSaver allocator, but the cached pool entry remains reusable until `evict_region_pool_from_cache(...)` removes it.
 - `memsaver_pause(nullptr)` and `memsaver_resume(nullptr)` operate on all managed tags.
 - `enable_cpu_backup` is normalized off for `AllocationKind::ARENA`; CPU backup only applies to `AllocationKind::REGULAR`.
 
@@ -151,11 +152,13 @@ Build-only helper:
 ./tests/sh/run_all_cpp_tests.sh
 ```
 
-Torch runtime tests:
+Runtime tests:
 
 ```bash
-./tests/sh/run_torch_basic_test.sh
-./tests/sh/run_torch_arena_test.sh
+./tests/sh/run_basic_test.sh
+./tests/sh/run_arena_test.sh
+./tests/sh/run_arena_virtual_test.sh
+./tests/sh/run_model_load_test.sh
 ```
 
 If the test binaries were added to CTest, you can also run:
@@ -169,7 +172,7 @@ Current coverage includes:
 - Regular allocations with tag-based metadata tracking
 - Pause and resume with CPU backup enabled
 - Pause and resume without CPU backup
-- Matmul scenarios that mix managed regions with Torch's default pool
+- Matmul scenarios that mix managed regions with the default pool
 - Same-thread and child-thread region behavior
 - Region reentry and address reuse
 - Arena common backing
@@ -186,7 +189,9 @@ Current coverage includes:
 ├── tests/basic_test.cpp
 ├── tests/arena_test.cpp
 ├── tests/utils/test_utils.h
-├── tests/sh/run_torch_basic_test.sh
-├── tests/sh/run_torch_arena_test.sh
+├── tests/sh/run_basic_test.sh
+├── tests/sh/run_arena_test.sh
+├── tests/sh/run_arena_virtual_test.sh
+├── tests/sh/run_model_load_test.sh
 └── build.sh
 ```

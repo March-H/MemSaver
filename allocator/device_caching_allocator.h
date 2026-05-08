@@ -147,7 +147,7 @@ class DeviceCachingAllocator {
     if (block_pool_type_ == 3) {
       return arena_virtual_blocks_;
     } else if (block_pool_type_ == 2) {
-      return custom_blocks_;
+      return fixed_blocks_;
     } else if (block_pool_type_ == 1) {
       return large_blocks_;
     }
@@ -365,7 +365,7 @@ class DeviceCachingAllocator {
   std::unordered_map<void*, Block*> live_blocks_;
   BlockPool small_blocks_{true};
   BlockPool large_blocks_{false};
-  BlockPool custom_blocks_{false};
+  BlockPool fixed_blocks_{false};
   BlockPool arena_virtual_blocks_{false};
   std::deque<std::pair<cudaEvent_t, Block*>> cuda_events_;
   std::vector<Block*> blocks_;

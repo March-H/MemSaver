@@ -14,8 +14,10 @@ This document describes the current repository layout.
 │   ├── basic_test.cpp                # Regular allocation and region behavior tests
 │   ├── arena_test.cpp                # Arena allocation behavior tests
 │   ├── sh/run_all_cpp_tests.sh       # Build the memsaver target
-│   ├── sh/run_torch_basic_test.sh    # Build and run the Torch basic test
-│   ├── sh/run_torch_arena_test.sh    # Build and run the Torch arena test
+│   ├── sh/run_basic_test.sh          # Build and run the basic test
+│   ├── sh/run_arena_test.sh          # Build and run the arena test
+│   ├── sh/run_arena_virtual_test.sh  # Build and run the arena-virtual test
+│   ├── sh/run_model_load_test.sh     # Build and run the model-load test
 │   ├── utils/test_utils.h            # Shared test helpers
 │   └── 测试项目.md                   # Test case notes
 ├── build.sh                          # Build helper
@@ -29,4 +31,4 @@ This document describes the current repository layout.
 
 - `include/` contains the installable public header.
 - `src/internal/` contains private implementation details.
-- `tests/` contains Torch-based runtime tests and helper scripts.
+- `tests/` contains runtime tests and helper scripts.

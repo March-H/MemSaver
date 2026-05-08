@@ -10,11 +10,11 @@
 class MemPool {
  public:
   explicit MemPool(
-      CudaMallocFn custom_malloc = nullptr,
-      CudaFreeFn custom_free = nullptr,
+      CudaMallocFn malloc_fn = nullptr,
+      CudaFreeFn free_fn = nullptr,
       int block_pool_type = 0)
-      : malloc_fn_(std::move(custom_malloc)),
-        free_fn_(std::move(custom_free)),
+      : malloc_fn_(std::move(malloc_fn)),
+        free_fn_(std::move(free_fn)),
         block_pool_type_(block_pool_type) {
     if (!malloc_fn_) {
       malloc_fn_ = [](void** ptr, std::size_t size) {

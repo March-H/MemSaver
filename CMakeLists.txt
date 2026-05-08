@@ -87,11 +87,6 @@ endif()
 set(MEMSAVER_SOURCES
   src/internal/context_impl.cpp
   src/entrypoint.cpp
-)
-
-set(MEMSAVER_CUSTOM_SOURCES
-  src/internal/context_impl.cpp
-  src/customEntrypoint.cpp
   allocator/allocator.cpp
 )
 
@@ -110,34 +105,12 @@ target_include_directories(memsaver
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   PRIVATE
-    ${TORCH_INCLUDE_DIRS}
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CUDAToolkit_INCLUDE_DIRS}
-)
-target_compile_options(memsaver PRIVATE ${MEMSAVER_TORCH_CXX_FLAGS})
-target_link_libraries(memsaver PUBLIC CUDA::cuda_driver ${MEMSAVER_CUDART_LINK_LIBRARY})
-target_link_libraries(memsaver PRIVATE dl ${TORCH_LIBRARIES} ${MEMSAVER_TORCH_EXTRA_LINK_LIBRARIES})
-set_target_properties(memsaver PROPERTIES POSITION_INDEPENDENT_CODE ON)
-if(Torch_FOUND)
-  set_target_properties(memsaver PROPERTIES
-    BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib;${MEMSAVER_TORCH_CUDA_LIBRARY_DIRS}")
-endif()
-
-add_library(memsaver_custom ${MEMSAVER_CUSTOM_SOURCES})
-target_compile_features(memsaver_custom PUBLIC cxx_std_17)
-target_compile_definitions(memsaver_custom
-  PRIVATE MEMSAVER_FATAL_ON_ERROR=${MEMSAVER_FATAL_ON_ERROR_VALUE})
-target_include_directories(memsaver_custom
-  PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-  PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CUDAToolkit_INCLUDE_DIRS}
 )
-target_link_libraries(memsaver_custom PUBLIC CUDA::cuda_driver ${MEMSAVER_CUDART_LINK_LIBRARY})
-set_target_properties(memsaver_custom PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(memsaver PUBLIC CUDA::cuda_driver ${MEMSAVER_CUDART_LINK_LIBRARY})
+set_target_properties(memsaver PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 install(TARGETS
     memsaver
@@ -179,7 +152,7 @@ if(MEMSAVER_BUILD_TESTS)
   include(CTest)
 
   if(Torch_FOUND)
-    function(add_memsaver_custom_test target)
+    function(add_memsaver_test target)
       add_executable(${target} ${ARGN})
       target_compile_features(${target} PUBLIC cxx_std_17)
       target_compile_definitions(${target}
@@ -194,7 +167,7 @@ if(MEMSAVER_BUILD_TESTS)
       )
       target_link_libraries(${target}
         PRIVATE
-          memsaver_custom
+          memsaver
           ${TORCH_LIBRARIES}
           ${MEMSAVER_TORCH_EXTRA_LINK_LIBRARIES}
           CUDA::cuda_driver
@@ -208,99 +181,18 @@ if(MEMSAVER_BUILD_TESTS)
       add_test(NAME ${target} COMMAND ${target})
     endfunction()
 
-    add_memsaver_custom_test(
-      memsaver_custom_basic_test
-      customTests/basic_test.cpp)
-    add_memsaver_custom_test(
-      memsaver_custom_arena_test
-      customTests/arena_test.cpp)
-    add_memsaver_custom_test(
-      memsaver_custom_arena_virtual_test
-      customTests/arena_virtual_test.cpp)
-    add_memsaver_custom_test(
-      memsaver_custom_model_load_test
-      customTests/model_load_test.cpp
-      tests/utils/model_loader.cpp)
-
-    add_executable(memsaver_torch_basic_test tests/basic_test.cpp)
-    target_compile_features(memsaver_torch_basic_test PUBLIC cxx_std_17)
-    target_compile_definitions(memsaver_torch_basic_test
-      PRIVATE MEMSAVER_FATAL_ON_ERROR=${MEMSAVER_FATAL_ON_ERROR_VALUE})
-    target_compile_options(memsaver_torch_basic_test PRIVATE ${MEMSAVER_TORCH_CXX_FLAGS})
-    target_include_directories(memsaver_torch_basic_test
-      PRIVATE
-        ${TORCH_INCLUDE_DIRS}
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CUDAToolkit_INCLUDE_DIRS}
-    )
-    target_link_libraries(memsaver_torch_basic_test
-      PRIVATE
-        memsaver
-        ${TORCH_LIBRARIES}
-        ${MEMSAVER_TORCH_EXTRA_LINK_LIBRARIES}
-        CUDA::cuda_driver
-        ${MEMSAVER_CUDART_LINK_LIBRARY}
-        ${MEMSAVER_CUPTI_LINK_LIBRARY}
-    )
-    if(DEFINED TORCH_INSTALL_PREFIX)
-      set_target_properties(memsaver_torch_basic_test PROPERTIES
-        BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib;${MEMSAVER_TORCH_CUDA_LIBRARY_DIRS}")
-    endif()
-    add_test(NAME memsaver_torch_basic_test COMMAND memsaver_torch_basic_test)
-
-    add_executable(memsaver_torch_arena_test tests/arena_test.cpp)
-    target_compile_features(memsaver_torch_arena_test PUBLIC cxx_std_17)
-    target_compile_definitions(memsaver_torch_arena_test
-      PRIVATE MEMSAVER_FATAL_ON_ERROR=${MEMSAVER_FATAL_ON_ERROR_VALUE})
-    target_compile_options(memsaver_torch_arena_test PRIVATE ${MEMSAVER_TORCH_CXX_FLAGS})
-    target_include_directories(memsaver_torch_arena_test
-      PRIVATE
-        ${TORCH_INCLUDE_DIRS}
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CUDAToolkit_INCLUDE_DIRS}
-    )
-    target_link_libraries(memsaver_torch_arena_test
-      PRIVATE
-        memsaver
-        ${TORCH_LIBRARIES}
-        ${MEMSAVER_TORCH_EXTRA_LINK_LIBRARIES}
-        CUDA::cuda_driver
-        ${MEMSAVER_CUDART_LINK_LIBRARY}
-        ${MEMSAVER_CUPTI_LINK_LIBRARY}
-    )
-    if(DEFINED TORCH_INSTALL_PREFIX)
-      set_target_properties(memsaver_torch_arena_test PROPERTIES
-        BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib;${MEMSAVER_TORCH_CUDA_LIBRARY_DIRS}")
-    endif()
-    add_test(NAME memsaver_torch_arena_test COMMAND memsaver_torch_arena_test)
-
-    add_executable(
-      memsaver_torch_model_load_test
+    add_memsaver_test(
+      memsaver_basic_test
+      tests/basic_test.cpp)
+    add_memsaver_test(
+      memsaver_arena_test
+      tests/arena_test.cpp)
+    add_memsaver_test(
+      memsaver_arena_virtual_test
+      tests/arena_virtual_test.cpp)
+    add_memsaver_test(
+      memsaver_model_load_test
       tests/model_load_test.cpp
       tests/utils/model_loader.cpp)
-    target_compile_features(memsaver_torch_model_load_test PUBLIC cxx_std_17)
-    target_compile_definitions(memsaver_torch_model_load_test
-      PRIVATE MEMSAVER_FATAL_ON_ERROR=${MEMSAVER_FATAL_ON_ERROR_VALUE})
-    target_compile_options(memsaver_torch_model_load_test PRIVATE ${MEMSAVER_TORCH_CXX_FLAGS})
-    target_include_directories(memsaver_torch_model_load_test
-      PRIVATE
-        ${TORCH_INCLUDE_DIRS}
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CUDAToolkit_INCLUDE_DIRS}
-    )
-    target_link_libraries(memsaver_torch_model_load_test
-      PRIVATE
-        memsaver
-        ${TORCH_LIBRARIES}
-        ${MEMSAVER_TORCH_EXTRA_LINK_LIBRARIES}
-        CUDA::cuda_driver
-        ${MEMSAVER_CUDART_LINK_LIBRARY}
-        ${MEMSAVER_CUPTI_LINK_LIBRARY}
-    )
-    if(DEFINED TORCH_INSTALL_PREFIX)
-      set_target_properties(memsaver_torch_model_load_test PROPERTIES
-        BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib;${MEMSAVER_TORCH_CUDA_LIBRARY_DIRS}")
-    endif()
-    add_test(NAME memsaver_torch_model_load_test COMMAND memsaver_torch_model_load_test)
   endif()
 endif()

@@ -21,8 +21,8 @@ PY
 )"
 
 "${ROOT_DIR}/build.sh" \
-  --target memsaver_torch_arena_test \
+  --target memsaver_arena_virtual_test \
   --build-dir "${BUILD_DIR}"
 
 LD_LIBRARY_PATH="${BUILD_DIR}:${TORCH_DIR}/lib${TORCH_NVIDIA_LIB_DIRS:+:${TORCH_NVIDIA_LIB_DIRS}}:${LD_LIBRARY_PATH:-}" \
-  "${BUILD_DIR}/memsaver_torch_arena_test"
+  "${BUILD_DIR}/memsaver_arena_virtual_test"

@@ -1,6 +1,29 @@
+#include "utils/allocator_installer.h"
 #include "utils/test_utils.h"
 
-void TestCase1ArenaSharedBacking(MemSaver& memsaver, const uint64_t baseline) {
+void WarmUpArenaSharedEmptyHandle(MemSaver& memsaver) {
+  CheckCuda(
+      memsaver.enter_region("arena_warmup", false, AllocationKind::ARENA),
+      "enter_region(arena_warmup)");
+  torch::Tensor tensor = AllocBytesTensor(1ULL);
+  SyncCuda();
+  CheckCuda(memsaver.leave_region(), "leave_region(arena_warmup)");
+
+  tensor = torch::Tensor();
+  SyncCuda();
+  EmptyAllocatorCache();
+  CheckCuda(
+      memsaver.evict_region_pool_from_cache(
+          "arena_warmup",
+          false,
+          AllocationKind::ARENA),
+      "evict_region_pool_from_cache(arena_warmup)");
+}
+
+void TestCase1ArenaSharedBacking(MemSaver& memsaver) {
+  WarmUpArenaSharedEmptyHandle(memsaver);
+  const uint64_t baseline = DeviceUsedBytes();
+
   CheckCuda(
       memsaver.enter_region("naive", false, AllocationKind::ARENA),
       "enter_region(naive arena) case1");
@@ -12,7 +35,7 @@ void TestCase1ArenaSharedBacking(MemSaver& memsaver, const uint64_t baseline) {
   SyncCuda();
 
   ExpectMetadataCountByTag("naive", 1ULL, "arena case1 metadata count");
-  ExpectDeltaExact(baseline, 2ULL * kMiB, "arena case1 allocation delta");
+  ExpectDeltaExact(baseline, 0ULL, "arena case1 allocation delta");
   CheckTrue(
       tensor.cpu().eq(0x11).all().item<bool>(),
       "arena case1 expected full 20MiB to read back as 0x11");
@@ -26,12 +49,13 @@ void TestCase1ArenaSharedBacking(MemSaver& memsaver, const uint64_t baseline) {
           AllocationKind::ARENA),
       "evict_region_pool_from_cache(naive arena) case1");
   ExpectMetadataCountByTag("naive", 0ULL, "arena case1 metadata count after evict");
-  ExpectDeltaExact(baseline, 2ULL * kMiB, "arena case1 delta after evict");
+  ExpectDeltaExact(baseline, 0ULL, "arena case1 delta after evict");
 }
 
-void TestCase2ArenaActivateOffsets(
-    MemSaver& memsaver,
-    const uint64_t baseline) {
+void TestCase2ArenaActivateOffsets(MemSaver& memsaver) {
+  WarmUpArenaSharedEmptyHandle(memsaver);
+  const uint64_t baseline = DeviceUsedBytes();
+
   CheckCuda(
       memsaver.enter_region("naive", false, AllocationKind::ARENA),
       "enter_region(naive arena) case2");
@@ -58,7 +82,7 @@ void TestCase2ArenaActivateOffsets(
   SyncCuda();
 
   ExpectMetadataCountByTag("naive", 1ULL, "arena case2 metadata count");
-  ExpectDeltaExact(baseline, 6ULL * kMiB, "arena case2 allocation delta");
+  ExpectDeltaExact(baseline, 4ULL * kMiB, "arena case2 allocation delta");
   const auto host = tensor.cpu();
   CheckTrue(
       host.narrow(0, 0, static_cast<int64_t>(2ULL * kMiB))
@@ -94,12 +118,13 @@ void TestCase2ArenaActivateOffsets(
           AllocationKind::ARENA),
       "evict_region_pool_from_cache(naive arena) case2");
   ExpectMetadataCountByTag("naive", 0ULL, "arena case2 metadata count after evict");
-  ExpectDeltaExact(baseline, 2ULL * kMiB, "arena case2 delta after evict");
+  ExpectDeltaExact(baseline, 0ULL, "arena case2 delta after evict");
 }
 
-void TestCase3ArenaDeactivateOffsets(
-    MemSaver& memsaver,
-    const uint64_t baseline) {
+void TestCase3ArenaDeactivateOffsets(MemSaver& memsaver) {
+  WarmUpArenaSharedEmptyHandle(memsaver);
+  const uint64_t baseline = DeviceUsedBytes();
+
   CheckCuda(
       memsaver.enter_region("naive", false, AllocationKind::ARENA),
       "enter_region(naive arena) case3");
@@ -134,7 +159,7 @@ void TestCase3ArenaDeactivateOffsets(
       "deactivate_arena_offsets(naive) case3");
   SyncCuda();
 
-  ExpectDeltaExact(baseline, 2ULL * kMiB, "arena case3 delta after deactivate");
+  ExpectDeltaExact(baseline, 0ULL, "arena case3 delta after deactivate");
   CheckTrue(
       tensor.cpu().eq(0x11).all().item<bool>(),
       "arena case3 expected full 20MiB to revert to 0x11 after deactivate");
@@ -148,7 +173,7 @@ void TestCase3ArenaDeactivateOffsets(
 
   ExpectDeltaExact(
       baseline,
-      2ULL * kMiB,
+      0ULL,
       "arena case3 delta after writing deactivated range");
   CheckTrue(
       tensor.cpu().eq(0x33).all().item<bool>(),
@@ -157,7 +182,7 @@ void TestCase3ArenaDeactivateOffsets(
 
   tensor = torch::Tensor();
   SyncCuda();
-  EmptyTorchCache();
+  EmptyAllocatorCache();
   CheckCuda(
       memsaver.evict_region_pool_from_cache(
           "naive",
@@ -165,10 +190,11 @@ void TestCase3ArenaDeactivateOffsets(
           AllocationKind::ARENA),
       "evict_region_pool_from_cache(naive arena) case3");
   ExpectMetadataCountByTag("naive", 0ULL, "arena case3 metadata count after evict");
-  ExpectDeltaExact(baseline, 2ULL * kMiB, "arena case3 delta after evict");
+  ExpectDeltaExact(baseline, 0ULL, "arena case3 delta after evict");
 }
 
 int main() {
+  InstallAllocator();
   SetTestName("arena_test");
   if (MaybeSkipNoGpu()) {
     return 0;
@@ -176,11 +202,10 @@ int main() {
 
   MemSaver memsaver;
   WarmUpRegularBytes({1ULL * kMiB}, true, true);
-  const uint64_t baseline = DeviceUsedBytes();
 
-  TestCase1ArenaSharedBacking(memsaver, baseline);
-  TestCase2ArenaActivateOffsets(memsaver, baseline);
-  TestCase3ArenaDeactivateOffsets(memsaver, baseline);
+  TestCase1ArenaSharedBacking(memsaver);
+  TestCase2ArenaActivateOffsets(memsaver);
+  TestCase3ArenaDeactivateOffsets(memsaver);
 
   std::cout << "[" << CurrentTestName() << "] all tests passed" << std::endl;
   return 0;

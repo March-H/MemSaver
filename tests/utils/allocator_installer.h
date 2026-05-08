@@ -1,5 +1,5 @@
-#ifndef MEMSAVER_CUSTOM_TORCH_ALLOCATOR_H_
-#define MEMSAVER_CUSTOM_TORCH_ALLOCATOR_H_
+#ifndef MEMSAVER_TESTS_UTILS_ALLOCATOR_INSTALLER_H_
+#define MEMSAVER_TESTS_UTILS_ALLOCATOR_INSTALLER_H_
 
 #include <memory>
 
@@ -7,7 +7,7 @@
 
 #include "allocator/allocator.h"
 
-inline void InstallCustomTorchAllocator() {
+inline void InstallAllocator() {
   static std::shared_ptr<c10::cuda::CUDACachingAllocator::CUDAAllocator>
       allocator = []() {
         auto current_allocator =

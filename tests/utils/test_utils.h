@@ -69,7 +69,7 @@ inline uint64_t DeviceUsedBytes() {
   return static_cast<uint64_t>(total_bytes - free_bytes);
 }
 
-inline void EmptyTorchCache() {
+inline void EmptyAllocatorCache() {
   CheckCuda(memsaver_empty_cache(), "memsaver_empty_cache");
   SyncCuda();
 }
@@ -85,7 +85,7 @@ inline void EvictPoolFromCache(
   SyncCuda();
 }
 
-inline void WarmUpTorchMatmul() {
+inline void WarmUpMatmul() {
   auto fp16_cuda =
       torch::TensorOptions().dtype(torch::kFloat16).device(torch::kCUDA);
   {
@@ -96,7 +96,7 @@ inline void WarmUpTorchMatmul() {
     (void)c;
   }
   SyncCuda();
-  EmptyTorchCache();
+  EmptyAllocatorCache();
 }
 
 inline void WarmUpModelLoaderPath() {
@@ -106,7 +106,7 @@ inline void WarmUpModelLoaderPath() {
   gpu.copy_(cpu);
   SyncCuda();
   gpu = torch::Tensor();
-  EmptyTorchCache();
+  EmptyAllocatorCache();
 }
 
 inline uint64_t CurrentDeltaBytes(const uint64_t baseline) {
@@ -239,7 +239,7 @@ inline void WarmUpRegularBytes(
       }
     }
   }
-  EmptyTorchCache();
+  EmptyAllocatorCache();
 }
 
 inline void DisturbPhysicalMemory() {

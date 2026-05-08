@@ -9,8 +9,8 @@ Usage:
 Examples:
   ./build.sh
   ./build.sh --target memsaver
-  ./build.sh --target memsaver_torch_basic_test
-  ./build.sh --target memsaver_torch_arena_test
+  ./build.sh --target memsaver_basic_test
+  ./build.sh --target memsaver_arena_test
 EOF
 }
 

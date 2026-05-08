@@ -14,8 +14,10 @@
 │   ├── basic_test.cpp                # regular 分配与 region 行为测试
 │   ├── arena_test.cpp                # arena 分配行为测试
 │   ├── sh/run_all_cpp_tests.sh       # 构建 memsaver target
-│   ├── sh/run_torch_basic_test.sh    # 构建并运行 Torch 基础测试
-│   ├── sh/run_torch_arena_test.sh    # 构建并运行 Torch arena 测试
+│   ├── sh/run_basic_test.sh          # 构建并运行基础测试
+│   ├── sh/run_arena_test.sh          # 构建并运行 arena 测试
+│   ├── sh/run_arena_virtual_test.sh  # 构建并运行 arena-virtual 测试
+│   ├── sh/run_model_load_test.sh     # 构建并运行模型加载测试
 │   ├── utils/test_utils.h            # 共享测试工具
 │   └── 测试项目.md                   # 测试用例说明
 ├── build.sh                          # 构建辅助脚本
@@ -29,4 +31,4 @@
 
 - `include/` 放可安装的公开头文件。
 - `src/internal/` 放内部实现细节，不作为公开接口。
-- `tests/` 放基于 Torch 的运行时测试和辅助脚本。
+- `tests/` 放运行时测试和辅助脚本。

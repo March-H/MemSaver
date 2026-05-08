@@ -1,5 +1,6 @@
 #include <thread>
 
+#include "utils/allocator_installer.h"
 #include "utils/test_utils.h"
 
 void TestCase1NaiveAllocations(MemSaver& memsaver) {
@@ -36,7 +37,7 @@ void TestCase1NaiveAllocations(MemSaver& memsaver) {
   SyncCuda();
 
   // 将pool从cache里驱逐后，其将不会有额外引用，将会自动触发析构
-  EmptyTorchCache();
+  EmptyAllocatorCache();
   CheckCuda(
       memsaver.evict_region_pool_from_cache(
           "naive",
@@ -174,7 +175,7 @@ void TestCase4MatmulWithTags(MemSaver& memsaver) {
       (void)warm_c;
       SyncCuda();
     }
-    EmptyTorchCache();
+    EmptyAllocatorCache();
   }
 
   auto fp16_cuda =
@@ -228,7 +229,7 @@ void TestCase4MatmulWithTags(MemSaver& memsaver) {
   a = torch::Tensor();
   b = torch::Tensor();
   c = torch::Tensor();
-  EmptyTorchCache();
+  EmptyAllocatorCache();
   CheckCuda(
       memsaver.evict_region_pool_from_cache(
           "MatA",
@@ -250,7 +251,7 @@ void TestCase5GemmSameThread(MemSaver& memsaver) {
       (void)warm_result;
       SyncCuda();
     }
-    EmptyTorchCache();
+    EmptyAllocatorCache();
   }
   const uint64_t baseline = DeviceUsedBytes();
 
@@ -296,7 +297,7 @@ void TestCase5GemmSameThread(MemSaver& memsaver) {
   result.b = torch::Tensor();
   result.c = torch::Tensor();
   SyncCuda();
-  EmptyTorchCache();
+  EmptyAllocatorCache();
   CheckCuda(
       memsaver.evict_region_pool_from_cache(
           "gemm",
@@ -315,7 +316,7 @@ void TestCase6GemmChildThread(MemSaver& memsaver) {
       SyncCuda();
     });
     warmup_worker.join();
-    EmptyTorchCache();
+    EmptyAllocatorCache();
   }
 
   {
@@ -341,7 +342,7 @@ void TestCase6GemmChildThread(MemSaver& memsaver) {
     result.b = torch::Tensor();
     result.c = torch::Tensor();
     SyncCuda();
-    EmptyTorchCache();
+    EmptyAllocatorCache();
     ExpectDeltaExact(baseline, 0, "case6 subcaseA unmanaged delta after release");
   }
 
@@ -405,7 +406,7 @@ void TestCase6GemmChildThread(MemSaver& memsaver) {
     output.result.b = torch::Tensor();
     output.result.c = torch::Tensor();
     SyncCuda();
-    EmptyTorchCache();
+    EmptyAllocatorCache();
     CheckCuda(
         memsaver.evict_region_pool_from_cache(
             "gemm_thread",
@@ -457,7 +458,7 @@ void TestCase7RegionReentryReusesAddress(MemSaver& memsaver) {
 
   b = torch::Tensor();
   SyncCuda();
-  EmptyTorchCache();
+  EmptyAllocatorCache();
   CheckCuda(
       memsaver.evict_region_pool_from_cache(
           "naive",
@@ -468,13 +469,14 @@ void TestCase7RegionReentryReusesAddress(MemSaver& memsaver) {
 }
 
 int main() {
+  InstallAllocator();
   SetTestName("basic_test");
   if (MaybeSkipNoGpu()) {
     return 0;
   }
 
   MemSaver memsaver;
-  WarmUpTorchMatmul();
+  WarmUpMatmul();
 
   TestCase1NaiveAllocations(memsaver);
   TestCase2CpuBackupPreserves(memsaver);
